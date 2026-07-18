@@ -14,6 +14,7 @@ import os
 import json
 import feedparser
 import requests
+from deep_translator import GoogleTranslator
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -28,6 +29,17 @@ RSS_FEEDS = {
 KEYWORDS_FILTER = ["solana", "sol", "bitcoin", "btc", "ethereum", "eth", "stellar", "xlm"]
 
 SEEN_FILE = "seen_articles.json"
+
+
+def translate_to_lithuanian(text: str) -> str:
+    """Išverčia tekstą į lietuvių kalbą. Jei nepavyksta - grąžina originalą."""
+    if not text:
+        return text
+    try:
+        return GoogleTranslator(source="auto", target="lt").translate(text)
+    except Exception as e:
+        print(f"[ĮSPĖJIMAS] Nepavyko išversti: {e}")
+        return text
 
 
 def load_seen() -> set:
@@ -86,12 +98,12 @@ def main():
             link = entry.get("link", "")
 
             if first_run:
-                # per pirmą paleidimą tik pažymim, nesiunčiam senų naujienų
                 seen.add(article_id)
                 continue
 
             if matches_filter(title, summary):
-                message = f"<b>[{source_name}]</b> {title}\n\n{link}"
+                title_lt = translate_to_lithuanian(title)
+                message = f"<b>[{source_name}]</b> {title_lt}\n\n{link}"
                 send_to_telegram(message)
 
             seen.add(article_id)
