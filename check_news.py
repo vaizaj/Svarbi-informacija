@@ -12,6 +12,8 @@ turi būti commit'inamas atgal į repozitoriją po kiekvieno paleidimo
 
 import os
 import json
+import re
+import html
 import feedparser
 import requests
 from deep_translator import GoogleTranslator
@@ -29,6 +31,21 @@ RSS_FEEDS = {
 KEYWORDS_FILTER = ["solana", "sol", "bitcoin", "btc", "ethereum", "eth", "stellar", "xlm"]
 
 SEEN_FILE = "seen_articles.json"
+
+# Kiek simbolių iš santraukos naudoti (trumpa ištrauka, ne visas straipsnis)
+SUMMARY_MAX_CHARS = 300
+
+
+def clean_summary(raw_summary: str) -> str:
+    """Pašalina HTML žymes ir apkarpo santrauką iki protingo ilgio."""
+    if not raw_summary:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", raw_summary)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > SUMMARY_MAX_CHARS:
+        text = text[:SUMMARY_MAX_CHARS].rsplit(" ", 1)[0] + "..."
+    return text
 
 
 def translate_to_lithuanian(text: str) -> str:
@@ -103,7 +120,14 @@ def main():
 
             if matches_filter(title, summary):
                 title_lt = translate_to_lithuanian(title)
-                message = f"<b>[{source_name}]</b> {title_lt}\n\n{link}"
+                summary_clean = clean_summary(summary)
+                summary_lt = translate_to_lithuanian(summary_clean)
+
+                message = f"<b>[{source_name}]</b> {title_lt}"
+                if summary_lt:
+                    message += f"\n\n{summary_lt}"
+                message += f"\n\n{link}"
+
                 send_to_telegram(message)
 
             seen.add(article_id)
