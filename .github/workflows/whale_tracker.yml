@@ -1,195 +1,39 @@
-"""
-BTC Whale + Strategy (Saylor) pirkimų sekimo botas -> Telegram
-------------------------------------------------------------------
-1) Seka dideles Bitcoin transakcijas (>~$10mln vertės) per viešą
-   blockchain.info API (nemokama, be rakto)
-2) Seka Strategy (buvusi MicroStrategy, tiktoris MSTR) naujus SEC 8-K
-   dokumentus, kuriuose minimas bitcoin pirkimas, per SEC EDGAR
-   Full-Text Search API (nemokama, be rakto)
+name: BTC Whale and Strategy Tracker
 
-SVARBU: Blockchain duomenys rodo tik adresus ir sumas, NE tapatybes -
-"whale" įspėjimas reiškia "didelis sandoris tinkle", o ne "tai konkretaus
-žinomo asmens pinigai", nebent adresas yra viešai/oficialiai pažymėtas.
-"""
+on:
+  schedule:
+    - cron: '30 * * * *'
+  workflow_dispatch:
 
-import os
-import json
-import requests
+permissions:
+  contents: write
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+jobs:
+  whale-tracker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-STATE_FILE = "whale_state.json"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; WhaleBot/1.0)"}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-# Minimali sandorio vertė USD, kad būtų laikoma "whale" transakcija
-MIN_USD_VALUE = 10_000_000
+      - name: Install dependencies
+        run: pip install requests
 
+      - name: Run whale tracker
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python whale_tracker.py
 
-def get_btc_price_usd() -> float:
-    """Gauna dabartinę BTC kainą iš Kraken (nemokama, be rakto, neblokuoja JAV serverių)."""
-    url = "https://api.kraken.com/0/public/Ticker?pair=XBTUSD"
-    resp = requests.get(url, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
-    result = data["result"]
-    pair_key = list(result.keys())[0]
-    return float(result[pair_key]["c"][0])  # paskutinė kaina
-
-
-def check_btc_whales(state: dict) -> list:
-    """Tikrina neseniai patvirtintus didelius BTC blokus dideliems sandoriams."""
-    messages = []
-    btc_price = get_btc_price_usd()
-    min_btc = MIN_USD_VALUE / btc_price
-
-    # Naudojam blockchain.info "unconfirmed-transactions" + naujausią bloką dideliems sandoriams
-    url = "https://blockchain.info/blocks/?format=json"
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        blocks = resp.json().get("blocks", [])
-    except Exception as e:
-        print(f"[KLAIDA] Nepavyko gauti blokų sąrašo: {e}")
-        return messages
-
-    if not blocks:
-        return messages
-
-    latest_block_height = blocks[0]["height"]
-    last_seen_block = state.get("last_seen_block", 0)
-
-    if latest_block_height <= last_seen_block:
-        print("Nėra naujų blokų nuo paskutinio patikrinimo.")
-        return messages
-
-    # Tikrinam tik naujausią bloką, kad neapkrautume API per daug užklausų
-    try:
-        block_url = f"https://blockchain.info/rawblock/{blocks[0]['hash']}"
-        resp = requests.get(block_url, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
-        block_data = resp.json()
-    except Exception as e:
-        print(f"[KLAIDA] Nepavyko gauti bloko duomenų: {e}")
-        state["last_seen_block"] = latest_block_height
-        return messages
-
-    for tx in block_data.get("tx", []):
-        total_out_satoshi = sum(out.get("value", 0) for out in tx.get("out", []))
-        total_out_btc = total_out_satoshi / 100_000_000
-        if total_out_btc >= min_btc:
-            usd_value = total_out_btc * btc_price
-            tx_hash = tx.get("hash", "")
-            messages.append(
-                f"🐋 <b>BTC Whale sandoris</b>\n"
-                f"Suma: {total_out_btc:,.1f} BTC (~${usd_value:,.0f})\n"
-                f"https://www.blockchain.com/explorer/transactions/btc/{tx_hash}"
-            )
-
-    state["last_seen_block"] = latest_block_height
-    return messages
-
-
-STRATEGY_CIK = "0001050446"  # MicroStrategy Incorporated d/b/a "Strategy" (MSTR)
-
-
-def check_strategy_filings(state: dict) -> list:
-    """Tikrina naujus Strategy (MSTR, CIK 1050446) 8-K dokumentus per SEC submissions API."""
-    messages = []
-    url = f"https://data.sec.gov/submissions/CIK{STRATEGY_CIK}.json"
-    sec_headers = {"User-Agent": "VaidasCryptoBot contact@example.com"}
-
-    try:
-        resp = requests.get(url, headers=sec_headers, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print(f"[KLAIDA] Nepavyko patikrinti SEC EDGAR: {e}")
-        return messages
-
-    recent = data.get("filings", {}).get("recent", {})
-    forms = recent.get("form", [])
-    dates = recent.get("filingDate", [])
-    accessions = recent.get("accessionNumber", [])
-    primary_docs = recent.get("primaryDocument", [])
-    descriptions = recent.get("primaryDocDescription", [])
-
-    seen_filings = set(state.get("seen_filings", []))
-
-    for i, form in enumerate(forms):
-        if form != "8-K":
-            continue
-
-        accession = accessions[i]
-        if accession in seen_filings:
-            continue
-
-        filing_date = dates[i]
-        doc = primary_docs[i]
-        accession_nodash = accession.replace("-", "")
-        filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(STRATEGY_CIK)}/{accession_nodash}/{doc}"
-        description = descriptions[i] if i < len(descriptions) else "8-K dokumentas"
-
-        messages.append(
-            f"📋 <b>Strategy (MSTR) naujas SEC 8-K</b>\n"
-            f"Data: {filing_date}\n"
-            f"{description}\n"
-            f"{filing_url}"
-        )
-        seen_filings.add(accession)
-
-    state["seen_filings"] = list(seen_filings)[-100:]
-    return messages
-
-
-def load_state() -> dict:
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-
-def save_state(state: dict):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
-
-
-def send_to_telegram(text: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    resp = requests.post(url, data=payload, timeout=15)
-    if not resp.ok:
-        print(f"[KLAIDA] Nepavyko išsiųsti į Telegram: {resp.text}")
-    else:
-        print("[OK] Žinutė išsiųsta.")
-
-
-def main():
-    state = load_state()
-    is_first_run = not state
-
-    all_messages = []
-    all_messages += check_btc_whales(state)
-    all_messages += check_strategy_filings(state)
-
-    save_state(state)
-
-    if is_first_run:
-        print("Pirmas paleidimas - praleidžiam siuntimą, tik užsirašom būseną.")
-        return
-
-    if not all_messages:
-        print("Naujų whale sandorių ar Strategy dokumentų nerasta.")
-        return
-
-    for msg in all_messages:
-        send_to_telegram(msg)
-
-
-if __name__ == "__main__":
-    main()
+      - name: Commit updated state file
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add whale_state.json
+          git diff --staged --quiet || git commit -m "Update whale tracker state"
+          git pull --rebase origin main
+          git push
