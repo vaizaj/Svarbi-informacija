@@ -34,7 +34,7 @@ RSS_FEEDS = {
     "BeInCrypto": "https://beincrypto.com/feed/",
 }
 
-KEYWORDS_FILTER = ["solana", "sol", "bitcoin", "btc", "ethereum", "eth", "stellar", "xlm"]
+KEYWORDS_FILTER = ["solana", "sol", "bitcoin", "btc", "ethereum", "eth", "stellar", "xlm", "trump", "white house"]
 
 SEEN_FILE = "seen_articles.json"
 
@@ -46,9 +46,13 @@ def clean_summary(raw_summary: str) -> str:
     """Pašalina HTML žymes ir apkarpo santrauką iki protingo ilgio."""
     if not raw_summary:
         return ""
+    # pašalinam HTML žymes
     text = re.sub(r"<[^>]+>", " ", raw_summary)
+    # dekoduojam HTML simbolius (&amp; -> & ir pan.)
     text = html.unescape(text)
+    # sutvarkom tarpus
     text = re.sub(r"\s+", " ", text).strip()
+    # apkarpom iki protingo ilgio
     if len(text) > SUMMARY_MAX_CHARS:
         text = text[:SUMMARY_MAX_CHARS].rsplit(" ", 1)[0] + "..."
     return text
@@ -121,6 +125,7 @@ def main():
             link = entry.get("link", "")
 
             if first_run:
+                # per pirmą paleidimą tik pažymim, nesiunčiam senų naujienų
                 seen.add(article_id)
                 continue
 
