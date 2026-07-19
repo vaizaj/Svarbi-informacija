@@ -2,7 +2,8 @@ name: SOL Technical Analysis Signals
 
 on:
   schedule:
-    - cron: '0 */4 * * *'
+    # kas valandą, 15 min. po valandos (kad neapkrautų kartu su kitais darbais)
+    - cron: '15 * * * *'
   workflow_dispatch:
 
 permissions:
