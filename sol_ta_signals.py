@@ -1,7 +1,7 @@
 """
 SOL techninės analizės signalų botas -> Telegram
 ----------------------------------------------------
-Kas 4 valandas tikrina SOL/USD kainą (Kraken duomenys) ir skaičiuoja:
+Kas valandą tikrina SOL/USD kainą (Kraken duomenys) ir skaičiuoja:
 - RSI (14) - ar moneta "pervirkinta" ar "perparduota"
 - MACD (12, 26, 9) - momentumo/tendencijos kryptis
 - SMA50 / SMA200 - ilgalaikė tendencija (Golden Cross / Death Cross)
@@ -25,7 +25,7 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 SYMBOL = "SOLUSD"
-INTERVAL_MINUTES = 240  # 4 valandos
+INTERVAL_MINUTES = 60  # 1 valanda (swing signalams)
 STATE_FILE = "ta_state.json"
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TA-Bot/1.0)"}
@@ -161,7 +161,7 @@ def main():
         print("Nauji signalai nerasti šį kartą.")
         return
 
-    message = f"<b>🔍 SOL techninės analizės signalas (4h)</b>\n\nKaina: ${current_price:,.2f}\n\n"
+    message = f"<b>🔍 SOL techninės analizės signalas (1h)</b>\n\nKaina: ${current_price:,.2f}\n\n"
     message += "\n".join(signals)
     message += "\n\n<i>Tai nėra finansinis patarimas - tik automatinis indikatorių skaičiavimas. Sprendimą priimk pats.</i>"
 
