@@ -26,6 +26,12 @@ RSS_FEEDS = {
     "Cointelegraph": "https://cointelegraph.com/rss",
     "Decrypt": "https://decrypt.co/feed",
     "The Block": "https://www.theblock.co/rss.xml",
+    "Bitcoin Magazine": "https://bitcoinmagazine.com/feed",
+    "CryptoSlate": "https://cryptoslate.com/feed/",
+    "NewsBTC": "https://www.newsbtc.com/feed/",
+    "U.Today": "https://u.today/rss",
+    "CryptoPotato": "https://cryptopotato.com/feed/",
+    "BeInCrypto": "https://beincrypto.com/feed/",
 }
 
 KEYWORDS_FILTER = ["solana", "sol", "bitcoin", "btc", "ethereum", "eth", "stellar", "xlm"]
