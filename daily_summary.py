@@ -5,23 +5,27 @@ Kartą per dieną (9:00 Lietuvos laiku) siunčia:
 - BTC, ETH, SOL, XLM kainas tuo momentu (USD) + 24h pokytį
 - Rinkos nuotaikų indeksą (Fear & Greed Index)
 
-Naudoja nemokamus, be API rakto veikiančius šaltinius:
-- Binance viešas API (kainos)
-- alternative.me (Fear & Greed Index)
+Kainoms naudojami TRYS nemokami šaltiniai su atsargine (fallback) logika:
+CoinGecko -> Binance -> CoinCap. Jei vienas neveikia (pvz. dėl serverio
+lokacijos apribojimų), automatiškai bandomas kitas.
 """
 
 import os
+import time
 import requests
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
+# CoinGecko id -> papildoma informacija kitiems šaltiniams
 COINS = {
-    "BTCUSDT": "BTC",
-    "ETHUSDT": "ETH",
-    "SOLUSDT": "SOL",
-    "XLMUSDT": "XLM",
+    "bitcoin": {"symbol": "BTC", "binance": "BTCUSDT", "coincap": "bitcoin"},
+    "ethereum": {"symbol": "ETH", "binance": "ETHUSDT", "coincap": "ethereum"},
+    "solana": {"symbol": "SOL", "binance": "SOLUSDT", "coincap": "solana"},
+    "stellar": {"symbol": "XLM", "binance": "XLMUSDT", "coincap": "stellar"},
 }
+
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CryptoNewsBot/1.0)"}
 
 SENTIMENT_LT = {
     "Extreme Fear": "Ekstremali baimė",
@@ -32,28 +36,75 @@ SENTIMENT_LT = {
 }
 
 
-def get_prices() -> dict:
-    """Gauna dabartines kainas ir 24h pokytį iš Binance viešo API."""
-    prices = {}
-    for symbol in COINS:
-        url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
-        try:
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            prices[symbol] = {
-                "usd": float(data["lastPrice"]),
-                "usd_24h_change": float(data["priceChangePercent"]),
+def try_coingecko() -> dict:
+    ids = ",".join(COINS.keys())
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd&include_24hr_change=true"
+    resp = requests.get(url, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    result = {}
+    for coin_id in COINS:
+        if coin_id in data:
+            result[coin_id] = {
+                "usd": data[coin_id]["usd"],
+                "usd_24h_change": data[coin_id].get("usd_24h_change", 0),
             }
+    return result
+
+
+def try_binance() -> dict:
+    result = {}
+    for coin_id, info in COINS.items():
+        url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={info['binance']}"
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        result[coin_id] = {
+            "usd": float(data["lastPrice"]),
+            "usd_24h_change": float(data["priceChangePercent"]),
+        }
+    return result
+
+
+def try_coincap() -> dict:
+    result = {}
+    for coin_id, info in COINS.items():
+        url = f"https://api.coincap.io/v2/assets/{info['coincap']}"
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()["data"]
+        result[coin_id] = {
+            "usd": float(data["priceUsd"]),
+            "usd_24h_change": float(data["changePercent24Hr"]),
+        }
+    return result
+
+
+def get_prices() -> dict:
+    """Bando kelis šaltinius iš eilės, kol vienas pilnai suveikia."""
+    sources = [
+        ("CoinGecko", try_coingecko),
+        ("Binance", try_binance),
+        ("CoinCap", try_coincap),
+    ]
+    for name, func in sources:
+        try:
+            prices = func()
+            if prices and len(prices) == len(COINS):
+                print(f"[OK] Kainos gautos iš: {name}")
+                return prices
+            print(f"[ĮSPĖJIMAS] {name} grąžino nepilnus duomenis, bandau kitą šaltinį.")
         except Exception as e:
-            print(f"[KLAIDA] Nepavyko gauti {symbol} kainos: {e}")
-    return prices
+            print(f"[ĮSPĖJIMAS] {name} nepavyko: {e}")
+        time.sleep(2)
+    print("[KLAIDA] Nepavyko gauti kainų iš jokio šaltinio.")
+    return {}
 
 
 def get_sentiment() -> tuple:
     """Gauna Fear & Greed indeksą (0-100) ir jo klasifikaciją."""
     url = "https://api.alternative.me/fng/?limit=1"
-    resp = requests.get(url, timeout=15)
+    resp = requests.get(url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
     data = resp.json()["data"][0]
     value = data["value"]
@@ -73,7 +124,8 @@ def build_message() -> str:
 
     lines = ["<b>📊 Dienos krypto suvestinė</b>\n"]
 
-    for coin_id, symbol in COINS.items():
+    for coin_id, info in COINS.items():
+        symbol = info["symbol"]
         if coin_id in prices:
             price = prices[coin_id]["usd"]
             change = prices[coin_id].get("usd_24h_change", 0)
