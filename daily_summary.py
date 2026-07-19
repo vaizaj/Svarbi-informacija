@@ -6,7 +6,7 @@ Kartą per dieną (9:00 Lietuvos laiku) siunčia:
 - Rinkos nuotaikų indeksą (Fear & Greed Index)
 
 Naudoja nemokamus, be API rakto veikiančius šaltinius:
-- CoinGecko (kainos)
+- Binance viešas API (kainos)
 - alternative.me (Fear & Greed Index)
 """
 
@@ -17,13 +17,12 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 COINS = {
-    "bitcoin": "BTC",
-    "ethereum": "ETH",
-    "solana": "SOL",
-    "stellar": "XLM",
+    "BTCUSDT": "BTC",
+    "ETHUSDT": "ETH",
+    "SOLUSDT": "SOL",
+    "XLMUSDT": "XLM",
 }
 
-# Fear & Greed reikšmių vertimas į lietuvių kalbą
 SENTIMENT_LT = {
     "Extreme Fear": "Ekstremali baimė",
     "Fear": "Baimė",
@@ -34,12 +33,21 @@ SENTIMENT_LT = {
 
 
 def get_prices() -> dict:
-    """Gauna dabartines kainas ir 24h pokytį iš CoinGecko."""
-    ids = ",".join(COINS.keys())
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd&include_24hr_change=true"
-    resp = requests.get(url, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+    """Gauna dabartines kainas ir 24h pokytį iš Binance viešo API."""
+    prices = {}
+    for symbol in COINS:
+        url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
+        try:
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            prices[symbol] = {
+                "usd": float(data["lastPrice"]),
+                "usd_24h_change": float(data["priceChangePercent"]),
+            }
+        except Exception as e:
+            print(f"[KLAIDA] Nepavyko gauti {symbol} kainos: {e}")
+    return prices
 
 
 def get_sentiment() -> tuple:
