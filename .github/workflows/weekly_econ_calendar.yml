@@ -1,0 +1,29 @@
+name: Weekly Economic Calendar
+
+on:
+  schedule:
+    # Kiekvieną pirmadienį 7:00 UTC (~9-10 val. Lietuvos laiku)
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+jobs:
+  weekly-calendar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Send weekly calendar
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python weekly_econ_calendar.py
