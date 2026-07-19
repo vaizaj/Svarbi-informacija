@@ -2,8 +2,10 @@ name: Crypto News Check
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
-  workflow_dispatch:
+    # Paleidžia kas valandą (UTC laiku) - realistiškesnis intervalas,
+    # nes GitHub gali gerokai vėluoti/praleisti labai dažnus (15 min.) paleidimus
+    - cron: '0 * * * *'
+  workflow_dispatch: # leidžia paleisti rankiniu būdu per GitHub svetainę
 
 permissions:
   contents: write
