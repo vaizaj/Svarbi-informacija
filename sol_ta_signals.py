@@ -1,7 +1,7 @@
 """
 SOL techninės analizės signalų botas -> Telegram
 ----------------------------------------------------
-Kas 4 valandas tikrina SOL/USDT kainą (Binance duomenys) ir skaičiuoja:
+Kas 4 valandas tikrina SOL/USD kainą (Kraken duomenys) ir skaičiuoja:
 - RSI (14) - ar moneta "pervirkinta" ar "perparduota"
 - MACD (12, 26, 9) - momentumo/tendencijos kryptis
 - SMA50 / SMA200 - ilgalaikė tendencija (Golden Cross / Death Cross)
@@ -24,22 +24,30 @@ import pandas as pd
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-SYMBOL = "SOLUSDT"
-INTERVAL = "4h"
+SYMBOL = "SOLUSD"
+INTERVAL_MINUTES = 240  # 4 valandos
 STATE_FILE = "ta_state.json"
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TA-Bot/1.0)"}
 
 
 def fetch_klines() -> pd.DataFrame:
-    url = f"https://api.binance.com/api/v3/klines?symbol={SYMBOL}&interval={INTERVAL}&limit=250"
+    """Gauna 4h žvakes iš Kraken viešo API (neblokuoja JAV serverių, skirtingai nei Binance)."""
+    url = f"https://api.kraken.com/0/public/OHLC?pair={SYMBOL}&interval={INTERVAL_MINUTES}"
     resp = requests.get(url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
     data = resp.json()
-    df = pd.DataFrame(data, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_volume", "trades", "taker_buy_base",
-        "taker_buy_quote", "ignore"
+
+    if data.get("error"):
+        raise RuntimeError(f"Kraken API klaida: {data['error']}")
+
+    result = data["result"]
+    # rezultate yra vienas raktas su žvakių duomenimis (pvz. "SOLUSD"), be "last"
+    pair_key = [k for k in result.keys() if k != "last"][0]
+    candles = result[pair_key]
+
+    df = pd.DataFrame(candles, columns=[
+        "time", "open", "high", "low", "close", "vwap", "volume", "count"
     ])
     df["close"] = df["close"].astype(float)
     df["high"] = df["high"].astype(float)
