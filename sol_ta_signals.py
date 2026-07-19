@@ -109,14 +109,14 @@ def main():
     sma50 = close.rolling(50).mean()
     sma200 = close.rolling(200).mean()
 
-    current_price = close.iloc[-1]
-    current_rsi = rsi.iloc[-1]
-    macd_above_signal_now = macd_line.iloc[-1] > signal_line.iloc[-1]
+    current_price = float(close.iloc[-1])
+    current_rsi = float(rsi.iloc[-1])
+    macd_above_signal_now = bool(macd_line.iloc[-1] > signal_line.iloc[-1])
     sma50_above_sma200_now = (
-        sma50.iloc[-1] > sma200.iloc[-1] if not pd.isna(sma200.iloc[-1]) else None
+        bool(sma50.iloc[-1] > sma200.iloc[-1]) if not pd.isna(sma200.iloc[-1]) else None
     )
-    rsi_oversold_now = current_rsi < 30
-    rsi_overbought_now = current_rsi > 70
+    rsi_oversold_now = bool(current_rsi < 30)
+    rsi_overbought_now = bool(current_rsi > 70)
 
     state = load_state()
     signals = []
