@@ -22,7 +22,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests pandas numpy matplotlib
+        run: pip install requests pandas numpy matplotlib tradingview-ta
 
       - name: Run TA signal check
         env:
