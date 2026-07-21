@@ -28,6 +28,11 @@ import json
 import requests
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from datetime import datetime
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -35,6 +40,7 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 SYMBOL = "SOLUSD"
 INTERVAL_MINUTES = 60  # 1 valanda
 STATE_FILE = "ta_state.json"
+CHART_FILE = "sol_chart.png"
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TA-Bot/1.0)"}
 
@@ -144,6 +150,84 @@ def save_state(state: dict):
         json.dump(state, f)
 
 
+def create_chart(df, rsi, macd_line, signal_line, bb_upper, bb_mid, bb_lower,
+                  stoch_k, stoch_d, sma50, sma200) -> str:
+    """Sukuria grafiką su kaina + Bollinger/SMA, RSI, MACD, Stochastic - paskutinės ~100 žvakės."""
+    n = 100
+    df_plot = df.tail(n).reset_index(drop=True)
+    x = pd.to_datetime(df_plot["time"], unit="s")
+
+    fig, axes = plt.subplots(4, 1, figsize=(11, 12), sharex=True,
+                              gridspec_kw={"height_ratios": [3, 1, 1, 1]})
+    fig.patch.set_facecolor("#0F172A")
+    for ax in axes:
+        ax.set_facecolor("#0F172A")
+        ax.tick_params(colors="#CBD5E1", labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_color("#334155")
+
+    # 1) Kaina + SMA + Bollinger
+    ax1 = axes[0]
+    ax1.plot(x, df_plot["close"], color="#38BDF8", linewidth=1.3, label="SOL kaina")
+    ax1.plot(x, bb_upper.tail(n).values, color="#94A3B8", linewidth=0.8, linestyle="--", label="BB viršus")
+    ax1.plot(x, bb_lower.tail(n).values, color="#94A3B8", linewidth=0.8, linestyle="--", label="BB apačia")
+    ax1.fill_between(x, bb_upper.tail(n).values, bb_lower.tail(n).values, color="#334155", alpha=0.2)
+    if not sma50.tail(n).isna().all():
+        ax1.plot(x, sma50.tail(n).values, color="#FBBF24", linewidth=1, label="SMA50")
+    if not sma200.tail(n).isna().all():
+        ax1.plot(x, sma200.tail(n).values, color="#F472B6", linewidth=1, label="SMA200")
+    ax1.set_title("SOL/USD - 1h grafikas", color="#E2E8F0", fontsize=12, loc="left")
+    ax1.legend(loc="upper left", fontsize=7, facecolor="#1E293B", labelcolor="#E2E8F0", framealpha=0.7)
+
+    # 2) RSI
+    ax2 = axes[1]
+    ax2.plot(x, rsi.tail(n).values, color="#A78BFA", linewidth=1.2)
+    ax2.axhline(70, color="#F87171", linewidth=0.7, linestyle="--")
+    ax2.axhline(30, color="#4ADE80", linewidth=0.7, linestyle="--")
+    ax2.set_ylabel("RSI", color="#CBD5E1", fontsize=8)
+    ax2.set_ylim(0, 100)
+
+    # 3) MACD
+    ax3 = axes[2]
+    ax3.plot(x, macd_line.tail(n).values, color="#38BDF8", linewidth=1, label="MACD")
+    ax3.plot(x, signal_line.tail(n).values, color="#FBBF24", linewidth=1, label="Signal")
+    hist = (macd_line - signal_line).tail(n).values
+    colors = ["#4ADE80" if v >= 0 else "#F87171" for v in hist]
+    ax3.bar(x, hist, color=colors, width=0.03, alpha=0.6)
+    ax3.set_ylabel("MACD", color="#CBD5E1", fontsize=8)
+    ax3.legend(loc="upper left", fontsize=7, facecolor="#1E293B", labelcolor="#E2E8F0", framealpha=0.7)
+
+    # 4) Stochastic
+    ax4 = axes[3]
+    ax4.plot(x, stoch_k.tail(n).values, color="#38BDF8", linewidth=1, label="%K")
+    ax4.plot(x, stoch_d.tail(n).values, color="#FBBF24", linewidth=1, label="%D")
+    ax4.axhline(80, color="#F87171", linewidth=0.7, linestyle="--")
+    ax4.axhline(20, color="#4ADE80", linewidth=0.7, linestyle="--")
+    ax4.set_ylabel("Stoch", color="#CBD5E1", fontsize=8)
+    ax4.set_ylim(0, 100)
+    ax4.legend(loc="upper left", fontsize=7, facecolor="#1E293B", labelcolor="#E2E8F0", framealpha=0.7)
+
+    ax4.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+    plt.setp(ax4.get_xticklabels(), rotation=30, ha="right")
+
+    plt.tight_layout()
+    plt.savefig(CHART_FILE, dpi=130, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return CHART_FILE
+
+
+def send_photo_to_telegram(photo_path: str, caption: str):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    with open(photo_path, "rb") as photo:
+        files = {"photo": photo}
+        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"}
+        resp = requests.post(url, data=data, files=files, timeout=30)
+    if not resp.ok:
+        print(f"[KLAIDA] Nepavyko išsiųsti grafiko: {resp.text}")
+    else:
+        print("[OK] Grafikas išsiųstas.")
+
+
 def send_to_telegram(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
@@ -195,42 +279,71 @@ def main():
     state = load_state()
     signals = []
 
-    def flag_change(key, current_value, on_true_msg, on_false_msg):
+    # --- Paaiškinimų žodynas kiekvienam galimam signalui ---
+    explanations = {
+        "macd_bull": "MACD linija kirto signalinę liniją iš apačios į viršų - tai dažnai rodo, kad trumpalaikis momentumas pradeda stiprėti pirkėjų naudai. Vienas iš labiausiai paplitusių momentumo indikatorių tarp treiderių.",
+        "macd_bear": "MACD linija kirto signalinę liniją iš viršaus į apačią - tai dažnai rodo silpstantį momentumą arba pardavėjų persvaros pradžią.",
+        "golden_cross": "50 periodų slankusis vidurkis pakilo virš 200 periodų vidurkio. Istoriškai tai laikoma vienu patikimiausių ILGALAIKĖS tendencijos pasikeitimo į augimo pusę signalų, nors jis vėluoja (rodo, kas jau vyksta, ne kas vyks).",
+        "death_cross": "50 periodų slankusis vidurkis nukrito žemiau 200 periodų vidurkio. Tai laikoma ilgalaikės mažėjančios tendencijos signalu.",
+        "rsi_oversold": "RSI nukrito žemiau 30 ribos - istoriškai tokiuose lygiuose kaina dažnai (bet ne visada) randa laikiną atramą ir atšoka, nes moneta laikoma 'per daug išparduota' trumpuoju laikotarpiu.",
+        "rsi_overbought": "RSI pakilo virš 70 ribos - istoriškai tokiuose lygiuose kaina dažnai patiria korekciją, nes moneta laikoma 'per daug išpirkta' trumpuoju laikotarpiu.",
+        "bb_lower": "Kaina išėjo už apatinės Bollinger juostos ribos - tai statistiškai retas įvykis (kaina paprastai 95% laiko yra tarp juostų), rodantis padidėjusį pardavimo spaudimą arba galimą trumpalaikį persistūmimą.",
+        "bb_upper": "Kaina išėjo už viršutinės Bollinger juostos ribos - statistiškai retas įvykis, rodantis stiprų pirkimo spaudimą arba galimą trumpalaikį perkaitimą.",
+        "stoch_oversold": "Stochastic oscillatorius (greitesnis nei RSI) rodo perparduotą zoną - dažnai naudojamas kartu su RSI patvirtinimui.",
+        "stoch_overbought": "Stochastic oscillatorius rodo pervirkintą zoną.",
+        "strong_trend": "ADX viršijo 25 ribą - tai reiškia, kad rinka šiuo metu turi AIŠKIĄ, stiprią tendenciją (kryptis priklauso nuo +DI/-DI). Svarbu: tendencijos sekimo strategijos (pvz. MACD, SMA) paprastai patikimesnės stiprios tendencijos metu.",
+        "weak_trend": "ADX nukrito žemiau 25 - rinka šiuo metu neturi aiškios krypties ('sukasi vietoje'). Tendencijos indikatoriai (MACD, SMA kirtimai) šiuo metu MAŽIAU patikimi - dažnesni klaidingi signalai.",
+        "vwap_up": "Kaina pakilo virš svertinės vidutinės kainos (VWAP) - institucijos dažnai naudoja VWAP kaip 'sąžiningos vertės' atskaitos tašką; kaina virš jo rodo pirkėjų persvarą nuo skaičiavimo pradžios.",
+        "vwap_down": "Kaina nukrito žemiau VWAP - rodo pardavėjų persvarą nuo skaičiavimo pradžios.",
+    }
+
+    signal_keys = []  # sekam, kurie paaiškinimai aktualūs šiam pranešimui
+
+    def flag_change(key, current_value, on_true_msg, on_false_msg, exp_true, exp_false):
         prev = state.get(key)
         if prev is not None and current_value is not None and prev != current_value:
             signals.append(on_true_msg if current_value else on_false_msg)
+            signal_keys.append(exp_true if current_value else exp_false)
 
+    signals.clear()
     flag_change(
         "macd_above_signal", macd_above_signal_now,
-        "📈 <b>MACD bullish kirtimasis</b>",
-        "📉 <b>MACD bearish kirtimasis</b>",
+        "📈 <b>MACD bullish kirtimasis</b>", "📉 <b>MACD bearish kirtimasis</b>",
+        "macd_bull", "macd_bear",
     )
     flag_change(
         "sma50_above_sma200", sma50_above_sma200_now,
-        "✨ <b>Golden Cross</b> (SMA50 > SMA200)",
-        "⚠️ <b>Death Cross</b> (SMA50 < SMA200)",
+        "✨ <b>Golden Cross</b> (SMA50 > SMA200)", "⚠️ <b>Death Cross</b> (SMA50 < SMA200)",
+        "golden_cross", "death_cross",
     )
     if rsi_oversold_now and not state.get("rsi_oversold", False):
         signals.append(f"🔵 <b>RSI perparduota</b> ({current_rsi:.1f})")
+        signal_keys.append("rsi_oversold")
     if rsi_overbought_now and not state.get("rsi_overbought", False):
         signals.append(f"🔴 <b>RSI pervirkinta</b> ({current_rsi:.1f})")
+        signal_keys.append("rsi_overbought")
     if price_below_bb_lower and not state.get("price_below_bb_lower", False):
-        signals.append("🔵 <b>Kaina po apatine Bollinger juosta</b> (galimai perparduota)")
+        signals.append("🔵 <b>Kaina po apatine Bollinger juosta</b>")
+        signal_keys.append("bb_lower")
     if price_above_bb_upper and not state.get("price_above_bb_upper", False):
-        signals.append("🔴 <b>Kaina virš viršutinės Bollinger juostos</b> (galimai pervirkinta)")
+        signals.append("🔴 <b>Kaina virš viršutinės Bollinger juostos</b>")
+        signal_keys.append("bb_upper")
     if stoch_oversold_now and not state.get("stoch_oversold", False):
         signals.append(f"🔵 <b>Stochastic perparduota</b> ({current_stoch_k:.1f})")
+        signal_keys.append("stoch_oversold")
     if stoch_overbought_now and not state.get("stoch_overbought", False):
         signals.append(f"🔴 <b>Stochastic pervirkinta</b> ({current_stoch_k:.1f})")
+        signal_keys.append("stoch_overbought")
     flag_change(
         "strong_trend", strong_trend_now,
-        f"💪 <b>Stiprėjanti tendencija</b> (ADX {current_adx:.1f} > 25)",
-        f"😴 <b>Silpstanti tendencija</b> (ADX {current_adx:.1f} < 25)",
+        f"💪 <b>Stiprėjanti tendencija</b> (ADX {current_adx:.1f})",
+        f"😴 <b>Silpstanti tendencija</b> (ADX {current_adx:.1f})",
+        "strong_trend", "weak_trend",
     )
     flag_change(
         "price_above_vwap", price_above_vwap_now,
-        "📊 <b>Kaina kirto VWAP į viršų</b>",
-        "📊 <b>Kaina kirto VWAP į apačią</b>",
+        "📊 <b>Kaina kirto VWAP į viršų</b>", "📊 <b>Kaina kirto VWAP į apačią</b>",
+        "vwap_up", "vwap_down",
     )
 
     # --- Sutapimo (confluence) skaičiavimas šiam momentui ---
@@ -280,15 +393,53 @@ def main():
         print("Nauji signalai nerasti šį kartą.")
         return
 
+    # --- Bendros apžvalgos sintezė (aprašomoji, ne prognozė) ---
+    if total_directional > 0:
+        bullish_ratio = bullish_count / total_directional
+    else:
+        bullish_ratio = 0.5
+
+    if bullish_ratio >= 0.75:
+        overview = "Dauguma indikatorių šiuo metu sutampa į bullish (kylančią) pusę."
+    elif bullish_ratio <= 0.25:
+        overview = "Dauguma indikatorių šiuo metu sutampa į bearish (krentančią) pusę."
+    else:
+        overview = "Indikatoriai šiuo metu prieštarauja vieni kitiems - nėra aiškaus sutapimo į vieną pusę."
+
+    if current_adx > 25:
+        overview += f" Tendencija šiuo metu vertinama kaip STIPRI (ADX {current_adx:.1f}), tad krypties indikatoriai (MACD, SMA) šiuo metu paprastai patikimesni."
+    else:
+        overview += f" Tendencija šiuo metu SILPNA/neaiški (ADX {current_adx:.1f}), tad krypties signalai šiuo metu rizikingesni - dažnesni klaidingi kirtimai."
+
+    # --- Grafiko generavimas ir siuntimas ---
+    try:
+        chart_path = create_chart(
+            df, rsi, macd_line, signal_line, bb_upper, bb_mid, bb_lower,
+            stoch_k, stoch_d, sma50, sma200,
+        )
+        short_caption = f"🔍 SOL signalas (1h) - ${current_price:,.2f}\n" + " | ".join(
+            s.split("<b>")[1].split("</b>")[0] if "<b>" in s else s for s in signals
+        )
+        if len(short_caption) > 1024:
+            short_caption = short_caption[:1000] + "..."
+        send_photo_to_telegram(chart_path, short_caption)
+    except Exception as e:
+        print(f"[KLAIDA] Nepavyko sukurti/išsiųsti grafiko: {e}")
+
+    # --- Detalus tekstinis paaiškinimas ---
     message = f"<b>🔍 SOL techninės analizės signalas (1h)</b>\n\nKaina: ${current_price:,.2f}\n\n"
-    message += "\n".join(signals)
+    for sig_text, exp_key in zip(signals, signal_keys):
+        message += f"{sig_text}\n<i>{explanations.get(exp_key, '')}</i>\n\n"
+
     message += (
-        f"\n\n<b>📊 Sutapimo santrauka:</b> {bullish_count}/{total_directional} indikatorių bullish, "
-        f"{bearish_count}/{total_directional} bearish"
+        f"<b>📊 Sutapimo santrauka:</b> {bullish_count}/{total_directional} indikatorių bullish, "
+        f"{bearish_count}/{total_directional} bearish\n\n"
     )
+    message += f"<b>🧭 Bendra apžvalga:</b> {overview}\n\n"
     message += (
-        "\n\n<i>Tai NĖRA finansinis patarimas ir NĖRA prognozė - "
-        "tik esamos indikatorių būsenos suvestinė. Sprendimą priimk pats.</i>"
+        "<i>Tai NĖRA finansinis patarimas ir NĖRA prognozė - joks indikatorių derinys "
+        "negali patikimai nuspėti trumpalaikės kainos krypties. Tai tik esamos indikatorių "
+        "būsenos suvestinė sprendimui priimti. Sprendimą priimk pats.</i>"
     )
 
     send_to_telegram(message)
