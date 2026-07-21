@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '30 * * * *'
   workflow_dispatch:
+    inputs:
+      reset_strategy:
+        description: 'Nustatyti Strategy SEC istoriją iš naujo (nesiųs senų dokumentų, tik nuo dabar naujus)'
+        required: false
+        default: 'false'
+        type: boolean
 
 permissions:
   contents: write
@@ -27,6 +33,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RESET_STRATEGY: ${{ github.event.inputs.reset_strategy || 'false' }}
         run: python whale_tracker.py
 
       - name: Commit updated state file
