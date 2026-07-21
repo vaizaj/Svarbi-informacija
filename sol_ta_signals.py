@@ -36,6 +36,7 @@ from datetime import datetime
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+FORCE_TEST = os.environ.get("FORCE_TEST", "false").lower() == "true"
 
 SYMBOL = "SOLUSD"
 INTERVAL_MINUTES = 60  # 1 valanda
@@ -66,6 +67,42 @@ def fetch_tradingview_rating() -> dict:
         return summary
     except Exception as e:
         print(f"[ĮSPĖJIMAS] Nepavyko gauti TradingView reitingo: {e}")
+        return None
+
+
+CHART_IMG_API_KEY = os.environ.get("CHART_IMG_API_KEY", "")
+CHART_IMG_FILE = "tv_chart.png"
+
+
+def fetch_tradingview_chart_image() -> str:
+    """
+    Gauna TIKRĄ TradingView stiliaus grafiko nuotrauką per chart-img.com API
+    (oficialus, legalus servisas, ne scraping). Reikalauja CHART_IMG_API_KEY.
+    Jei rakto nėra arba užklausa nepavyksta - grąžina None (naudosim savo
+    matplotlib grafiką kaip atsarginį variantą).
+    """
+    if not CHART_IMG_API_KEY:
+        return None
+    try:
+        url = "https://api.chart-img.com/v2/tradingview/advanced-chart"
+        headers = {"x-api-key": CHART_IMG_API_KEY, "content-type": "application/json"}
+        payload = {
+            "symbol": "KRAKEN:SOLUSD",
+            "interval": "1h",
+            "theme": "dark",
+            "studies": [
+                {"name": "Relative Strength Index"},
+                {"name": "MACD"},
+                {"name": "Bollinger Bands"},
+            ],
+        }
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        resp.raise_for_status()
+        with open(CHART_IMG_FILE, "wb") as f:
+            f.write(resp.content)
+        return CHART_IMG_FILE
+    except Exception as e:
+        print(f"[ĮSPĖJIMAS] Nepavyko gauti chart-img.com grafiko: {e}")
         return None
 
 
@@ -409,13 +446,29 @@ def main():
     is_first_run = not state
     save_state(new_state)
 
-    if is_first_run:
+    if is_first_run and not FORCE_TEST:
         print("Pirmas paleidimas - būsena užsirašyta, signalai nesiunčiami.")
         return
 
-    if not signals:
+    if not signals and not FORCE_TEST:
         print("Nauji signalai nerasti šį kartą.")
         return
+
+    if not signals and FORCE_TEST:
+        # Testinis režimas: nėra tikro signalo pokyčio, bet vis tiek
+        # sukuriam pranešimą su dabartine būsena, kad būtų galima
+        # patikrinti grafiką, TradingView integraciją ir formatavimą.
+        signals.append("🧪 <b>TESTINIS PALEIDIMAS</b> - žemiau esama indikatorių būsena (ne naujas signalas)")
+        signal_keys.append(None)
+        if rsi_oversold_now:
+            signals.append(f"🔵 RSI šiuo metu perparduota ({current_rsi:.1f})")
+        elif rsi_overbought_now:
+            signals.append(f"🔴 RSI šiuo metu pervirkinta ({current_rsi:.1f})")
+        else:
+            signals.append(f"⚪ RSI šiuo metu neutralu ({current_rsi:.1f})")
+        signal_keys.append(None)
+        signals.append(f"{'📈' if macd_above_signal_now else '📉'} MACD šiuo metu {'virš' if macd_above_signal_now else 'po'} signaline linija")
+        signal_keys.append(None)
 
     # --- Bendros apžvalgos sintezė (aprašomoji, ne prognozė) ---
     if total_directional > 0:
@@ -457,25 +510,34 @@ def main():
             f"(Buy: {tv_buy}, Sell: {tv_sell}, Neutral: {tv_neutral})\n{agreement}\n"
         )
 
-    # --- Grafiko generavimas ir siuntimas ---
+    # --- Grafiko generavimas ir siuntimas (pirmenybė - tikras TradingView vaizdas) ---
     try:
-        chart_path = create_chart(
-            df, rsi, macd_line, signal_line, bb_upper, bb_mid, bb_lower,
-            stoch_k, stoch_d, sma50, sma200,
-        )
         short_caption = f"🔍 SOL signalas (1h) - ${current_price:,.2f}\n" + " | ".join(
             s.split("<b>")[1].split("</b>")[0] if "<b>" in s else s for s in signals
         )
         if len(short_caption) > 1024:
             short_caption = short_caption[:1000] + "..."
-        send_photo_to_telegram(chart_path, short_caption)
+
+        tv_chart_path = fetch_tradingview_chart_image()
+        if tv_chart_path:
+            send_photo_to_telegram(tv_chart_path, short_caption + "\n\n(TradingView grafikas)")
+        else:
+            chart_path = create_chart(
+                df, rsi, macd_line, signal_line, bb_upper, bb_mid, bb_lower,
+                stoch_k, stoch_d, sma50, sma200,
+            )
+            send_photo_to_telegram(chart_path, short_caption)
     except Exception as e:
         print(f"[KLAIDA] Nepavyko sukurti/išsiųsti grafiko: {e}")
 
     # --- Detalus tekstinis paaiškinimas ---
     message = f"<b>🔍 SOL techninės analizės signalas (1h)</b>\n\nKaina: ${current_price:,.2f}\n\n"
     for sig_text, exp_key in zip(signals, signal_keys):
-        message += f"{sig_text}\n<i>{explanations.get(exp_key, '')}</i>\n\n"
+        explanation = explanations.get(exp_key, "") if exp_key else ""
+        if explanation:
+            message += f"{sig_text}\n<i>{explanation}</i>\n\n"
+        else:
+            message += f"{sig_text}\n\n"
 
     message += (
         f"<b>📊 Sutapimo santrauka:</b> {bullish_count}/{total_directional} indikatorių bullish, "
@@ -483,6 +545,10 @@ def main():
     )
     message += f"<b>🧭 Bendra apžvalga:</b> {overview}\n"
     message += tv_section
+    message += (
+        f"\n<b>📈 Gyvas grafikas:</b> "
+        f"<a href=\"https://www.tradingview.com/chart/?symbol=KRAKEN:SOLUSD\">Atidaryti TradingView</a>\n"
+    )
     message += (
         "\n<i>Tai NĖRA finansinis patarimas ir NĖRA prognozė - joks indikatorių derinys "
         "negali patikimai nuspėti trumpalaikės kainos krypties. Tai tik esamos indikatorių "
