@@ -93,11 +93,39 @@ def check_btc_whales(state: dict) -> list:
 STRATEGY_CIK = "0001050446"  # MicroStrategy Incorporated d/b/a "Strategy" (MSTR)
 
 
-def check_strategy_filings(state: dict) -> list:
-    """Tikrina naujus Strategy (MSTR, CIK 1050446) 8-K dokumentus per SEC submissions API."""
+def filing_mentions_bitcoin(filing_url: str) -> bool:
+    """Atsidaro patį 8-K dokumentą ir patikrina, ar jame minimas bitcoin/BTC pirkimas."""
+    try:
+        sec_headers = {"User-Agent": "VaidasCryptoBot contact@example.com"}
+        resp = requests.get(filing_url, headers=sec_headers, timeout=20)
+        resp.raise_for_status()
+        text_lower = resp.text.lower()
+        return "bitcoin" in text_lower or "btc update" in text_lower
+    except Exception as e:
+        print(f"[ĮSPĖJIMAS] Nepavyko patikrinti dokumento turinio: {e}")
+        # jei nepavyksta patikrinti - saugiau vis tiek parodyti, nei praleisti
+        return True
+
+
+def check_strategy_filings(state: dict, reset_only: bool = False) -> list:
+    """
+    Tikrina naujus Strategy (MSTR, CIK 1050446) 8-K dokumentus per SEC
+    submissions API. Siunčia TIK tuos, kurie mini bitcoin pirkimą.
+
+    Turi SAVO NEPRIKLAUSOMĄ "pirmo paleidimo" logiką (raktas "seen_filings"
+    buvimas state'e), kad pridėjus šią funkciją VĖLIAU (po to, kai kita dalis
+    - pvz. BTC whale - jau turėjo savo būseną), ji nesiųstų visos istorijos
+    iš karto kaip "naujų" pranešimų.
+
+    reset_only=True: tik užpildo seen_filings VISAIS dabartiniais dokumentais,
+    NIEKO nesiunčia - naudojama vieną kartą, kad "nustatytume nulinę liniją"
+    nuo šiandien, nesvarbu kokia buvo ankstesnė (galimai sugadinta) būsena.
+    """
     messages = []
     url = f"https://data.sec.gov/submissions/CIK{STRATEGY_CIK}.json"
     sec_headers = {"User-Agent": "VaidasCryptoBot contact@example.com"}
+
+    is_new_feature = "seen_filings" not in state
 
     try:
         resp = requests.get(url, headers=sec_headers, timeout=15)
@@ -124,11 +152,23 @@ def check_strategy_filings(state: dict) -> list:
         if accession in seen_filings:
             continue
 
+        seen_filings.add(accession)
+
+        # Nesiunčiam, jei tai: (a) visai pirmas šios funkcijos paleidimas,
+        # arba (b) tai priverstinis "reset" paleidimas
+        if is_new_feature or reset_only:
+            continue
+
         filing_date = dates[i]
         doc = primary_docs[i]
         accession_nodash = accession.replace("-", "")
         filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(STRATEGY_CIK)}/{accession_nodash}/{doc}"
         description = descriptions[i] if i < len(descriptions) else "8-K dokumentas"
+
+        # Tikrinam turinį - siunčiam TIK jei minimas bitcoin pirkimas
+        if not filing_mentions_bitcoin(filing_url):
+            print(f"[INFO] 8-K {accession} nemini bitcoin - praleidžiam.")
+            continue
 
         messages.append(
             f"📋 <b>Strategy (MSTR) naujas SEC 8-K</b>\n"
@@ -136,9 +176,8 @@ def check_strategy_filings(state: dict) -> list:
             f"{description}\n"
             f"{filing_url}"
         )
-        seen_filings.add(accession)
 
-    state["seen_filings"] = list(seen_filings)[-100:]
+    state["seen_filings"] = list(seen_filings)[-200:]
     return messages
 
 
@@ -169,15 +208,22 @@ def send_to_telegram(text: str):
         print("[OK] Žinutė išsiųsta.")
 
 
+RESET_STRATEGY = os.environ.get("RESET_STRATEGY", "false").lower() == "true"
+
+
 def main():
     state = load_state()
     is_first_run = not state
 
     all_messages = []
     all_messages += check_btc_whales(state)
-    all_messages += check_strategy_filings(state)
+    all_messages += check_strategy_filings(state, reset_only=RESET_STRATEGY)
 
     save_state(state)
+
+    if RESET_STRATEGY:
+        print("Strategy istorija nustatyta iš naujo - nuo dabar bus siunčiami tik NAUJI dokumentai.")
+        return
 
     if is_first_run:
         print("Pirmas paleidimas - praleidžiam siuntimą, tik užsirašom būseną.")
