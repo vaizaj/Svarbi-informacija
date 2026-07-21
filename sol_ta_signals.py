@@ -45,6 +45,30 @@ CHART_FILE = "sol_chart.png"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TA-Bot/1.0)"}
 
 
+def fetch_tradingview_rating() -> dict:
+    """
+    Gauna TradingView PAČIŲ apskaičiuotą techninį reitingą (Strong Buy/Buy/
+    Neutral/Sell/Strong Sell) kaip nepriklausomą patikrinimą mūsų skaičiavimams.
+    Naudoja viešą endpoint'ą, kuris maitina jų svetainės TA valdiklį.
+    Jei nepavyksta (endpoint nedokumentuotas oficialiai, gali keistis) -
+    grąžina None, o likusi scripto dalis veikia toliau normaliai.
+    """
+    try:
+        from tradingview_ta import TA_Handler, Interval
+        handler = TA_Handler(
+            symbol="SOLUSD",
+            screener="crypto",
+            exchange="KRAKEN",
+            interval=Interval.INTERVAL_1_HOUR,
+        )
+        analysis = handler.get_analysis()
+        summary = analysis.summary  # {'RECOMMENDATION': 'BUY', 'BUY': 12, 'SELL': 5, 'NEUTRAL': 9}
+        return summary
+    except Exception as e:
+        print(f"[ĮSPĖJIMAS] Nepavyko gauti TradingView reitingo: {e}")
+        return None
+
+
 def fetch_klines() -> pd.DataFrame:
     """Gauna 1h žvakes iš Kraken viešo API."""
     url = f"https://api.kraken.com/0/public/OHLC?pair={SYMBOL}&interval={INTERVAL_MINUTES}"
@@ -411,6 +435,28 @@ def main():
     else:
         overview += f" Tendencija šiuo metu SILPNA/neaiški (ADX {current_adx:.1f}), tad krypties signalai šiuo metu rizikingesni - dažnesni klaidingi kirtimai."
 
+    # --- Nepriklausomas patikrinimas: TradingView pačių reitingas ---
+    tv_summary = fetch_tradingview_rating()
+    tv_section = ""
+    if tv_summary:
+        tv_rec = tv_summary.get("RECOMMENDATION", "N/A")
+        tv_buy = tv_summary.get("BUY", 0)
+        tv_sell = tv_summary.get("SELL", 0)
+        tv_neutral = tv_summary.get("NEUTRAL", 0)
+
+        our_direction = "bullish" if bullish_ratio > 0.5 else "bearish" if bullish_ratio < 0.5 else "neutralu"
+        tv_direction = "bullish" if "BUY" in tv_rec else "bearish" if "SELL" in tv_rec else "neutralu"
+
+        if our_direction == tv_direction:
+            agreement = "✅ SUTAMPA su mūsų analize - tai stiprina pasitikėjimą signalu."
+        else:
+            agreement = "⚠️ NESUTAMPA su mūsų analize - verta būti atsargesniam, šaltiniai prieštarauja."
+
+        tv_section = (
+            f"\n<b>📡 TradingView nepriklausomas reitingas:</b> {tv_rec} "
+            f"(Buy: {tv_buy}, Sell: {tv_sell}, Neutral: {tv_neutral})\n{agreement}\n"
+        )
+
     # --- Grafiko generavimas ir siuntimas ---
     try:
         chart_path = create_chart(
@@ -435,9 +481,10 @@ def main():
         f"<b>📊 Sutapimo santrauka:</b> {bullish_count}/{total_directional} indikatorių bullish, "
         f"{bearish_count}/{total_directional} bearish\n\n"
     )
-    message += f"<b>🧭 Bendra apžvalga:</b> {overview}\n\n"
+    message += f"<b>🧭 Bendra apžvalga:</b> {overview}\n"
+    message += tv_section
     message += (
-        "<i>Tai NĖRA finansinis patarimas ir NĖRA prognozė - joks indikatorių derinys "
+        "\n<i>Tai NĖRA finansinis patarimas ir NĖRA prognozė - joks indikatorių derinys "
         "negali patikimai nuspėti trumpalaikės kainos krypties. Tai tik esamos indikatorių "
         "būsenos suvestinė sprendimui priimti. Sprendimą priimk pats.</i>"
     )
