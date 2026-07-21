@@ -106,6 +106,57 @@ def fetch_tradingview_chart_image() -> str:
         return None
 
 
+def fetch_buy_sell_ratio(lookback_seconds: int = 3600) -> dict:
+    """
+    Skaičiuoja realų pirkėjų vs pardavėjų apimties santykį per pastarąją
+    valandą, naudojant Kraken viešą Trades API (kiekvienas sandoris pažymėtas
+    kaip 'b' - pirkimas arba 's' - pardavimas). Tai TIKSLESNIS rodiklis nei
+    OBV, nes matuoja realų agresyvų pirkimo/pardavimo spaudimą, ne tik
+    kainos kryptį.
+    """
+    try:
+        since_ns = int((datetime.now().timestamp() - lookback_seconds) * 1_000_000_000)
+        url = f"https://api.kraken.com/0/public/Trades?pair={SYMBOL}&since={since_ns}"
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+
+        if data.get("error"):
+            print(f"[ĮSPĖJIMAS] Kraken Trades API klaida: {data['error']}")
+            return None
+
+        result = data["result"]
+        pair_key = [k for k in result.keys() if k != "last"][0]
+        trades = result[pair_key]
+
+        buy_volume = 0.0
+        sell_volume = 0.0
+        for trade in trades:
+            price, volume, time_, side = trade[0], trade[1], trade[2], trade[3]
+            vol = float(volume)
+            if side == "b":
+                buy_volume += vol
+            elif side == "s":
+                sell_volume += vol
+
+        total = buy_volume + sell_volume
+        if total == 0:
+            return None
+
+        buy_pct = 100 * buy_volume / total
+        sell_pct = 100 * sell_volume / total
+        return {
+            "buy_volume": buy_volume,
+            "sell_volume": sell_volume,
+            "buy_pct": buy_pct,
+            "sell_pct": sell_pct,
+            "trade_count": len(trades),
+        }
+    except Exception as e:
+        print(f"[ĮSPĖJIMAS] Nepavyko apskaičiuoti pirkėjų/pardavėjų santykio: {e}")
+        return None
+
+
 def fetch_klines() -> pd.DataFrame:
     """Gauna 1h žvakes iš Kraken viešo API."""
     url = f"https://api.kraken.com/0/public/OHLC?pair={SYMBOL}&interval={INTERVAL_MINUTES}"
@@ -337,6 +388,14 @@ def main():
     obv_rising_now = bool(obv.iloc[-1] > obv.iloc[-5]) if len(obv) > 5 else None
     price_above_vwap_now = bool(current_price > vwap.iloc[-1]) if not pd.isna(vwap.iloc[-1]) else None
 
+    # --- Pirkėjų/pardavėjų apimties santykis (paskutinė valanda) ---
+    buy_sell_data = fetch_buy_sell_ratio(lookback_seconds=3600)
+    strong_buy_pressure_now = None
+    strong_sell_pressure_now = None
+    if buy_sell_data:
+        strong_buy_pressure_now = bool(buy_sell_data["buy_pct"] >= 60)
+        strong_sell_pressure_now = bool(buy_sell_data["sell_pct"] >= 60)
+
     state = load_state()
     signals = []
 
@@ -356,6 +415,8 @@ def main():
         "weak_trend": "ADX nukrito žemiau 25 - rinka šiuo metu neturi aiškios krypties ('sukasi vietoje'). Tendencijos indikatoriai (MACD, SMA kirtimai) šiuo metu MAŽIAU patikimi - dažnesni klaidingi signalai.",
         "vwap_up": "Kaina pakilo virš svertinės vidutinės kainos (VWAP) - institucijos dažnai naudoja VWAP kaip 'sąžiningos vertės' atskaitos tašką; kaina virš jo rodo pirkėjų persvarą nuo skaičiavimo pradžios.",
         "vwap_down": "Kaina nukrito žemiau VWAP - rodo pardavėjų persvarą nuo skaičiavimo pradžios.",
+        "strong_buy": "Per pastarąją valandą realių sandorių apimtis rodo, kad AGRESYVŪS PIRKĖJAI (perkantys rinkos kaina) sudaro 60%+ visos apimties - tai stipresnis pirkimo spaudimo signalas nei vien kainos judėjimas.",
+        "strong_sell": "Per pastarąją valandą realių sandorių apimtis rodo, kad AGRESYVŪS PARDAVĖJAI (parduodantys rinkos kaina) sudaro 60%+ visos apimties - tai stipresnis pardavimo spaudimo signalas nei vien kainos judėjimas.",
     }
 
     signal_keys = []  # sekam, kurie paaiškinimai aktualūs šiam pranešimui
@@ -406,6 +467,12 @@ def main():
         "📊 <b>Kaina kirto VWAP į viršų</b>", "📊 <b>Kaina kirto VWAP į apačią</b>",
         "vwap_up", "vwap_down",
     )
+    if strong_buy_pressure_now and not state.get("strong_buy_pressure", False):
+        signals.append(f"🟢 <b>Stiprus pirkimo spaudimas</b> ({buy_sell_data['buy_pct']:.0f}% pirkėjų per 1h)")
+        signal_keys.append("strong_buy")
+    if strong_sell_pressure_now and not state.get("strong_sell_pressure", False):
+        signals.append(f"🔴 <b>Stiprus pardavimo spaudimas</b> ({buy_sell_data['sell_pct']:.0f}% pardavėjų per 1h)")
+        signal_keys.append("strong_sell")
 
     # --- Sutapimo (confluence) skaičiavimas šiam momentui ---
     bullish_count = 0
@@ -430,6 +497,8 @@ def main():
     tally(plus_di_above_now)
     tally(obv_rising_now)
     tally(price_above_vwap_now)
+    if buy_sell_data:
+        tally(buy_sell_data["buy_pct"] > 50)
 
     new_state = {
         "macd_above_signal": macd_above_signal_now,
@@ -442,6 +511,8 @@ def main():
         "stoch_overbought": stoch_overbought_now,
         "strong_trend": strong_trend_now,
         "price_above_vwap": price_above_vwap_now,
+        "strong_buy_pressure": strong_buy_pressure_now,
+        "strong_sell_pressure": strong_sell_pressure_now,
     }
     is_first_run = not state
     save_state(new_state)
@@ -543,6 +614,14 @@ def main():
         f"<b>📊 Sutapimo santrauka:</b> {bullish_count}/{total_directional} indikatorių bullish, "
         f"{bearish_count}/{total_directional} bearish\n\n"
     )
+
+    if buy_sell_data:
+        message += (
+            f"<b>⚖️ Pirkėjai vs pardavėjai (1h):</b> "
+            f"{buy_sell_data['buy_pct']:.0f}% pirkėjų / {buy_sell_data['sell_pct']:.0f}% pardavėjų "
+            f"({buy_sell_data['trade_count']} sandorių)\n\n"
+        )
+
     message += f"<b>🧭 Bendra apžvalga:</b> {overview}\n"
     message += tv_section
     message += (
