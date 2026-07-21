@@ -1,1 +1,1 @@
-{"macd_above_signal": false, "sma50_above_sma200": true, "rsi_oversold": false, "rsi_overbought": false, "price_below_bb_lower": false, "price_above_bb_upper": false, "stoch_oversold": true, "stoch_overbought": false, "strong_trend": false, "price_above_vwap": false}
+{"macd_above_signal": false, "sma50_above_sma200": true, "rsi_oversold": false, "rsi_overbought": false, "price_below_bb_lower": false, "price_above_bb_upper": false, "stoch_oversold": false, "stoch_overbought": false, "strong_trend": false, "price_above_vwap": false}
