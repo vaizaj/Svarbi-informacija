@@ -1,0 +1,48 @@
+name: BTC Technical Analysis Signals
+
+on:
+  schedule:
+    # kas valandą, 15 min. po valandos (kad neapkrautų kartu su kitais darbais)
+    - cron: '25 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_test:
+        description: 'Priverstinai išsiųsti testinę žinutę (grafikas + TradingView) nepriklausomai nuo signalų'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  ta-signals:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pandas numpy matplotlib tradingview-ta
+
+      - name: Run TA signal check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CHART_IMG_API_KEY: ${{ secrets.CHART_IMG_API_KEY }}
+          FORCE_TEST: ${{ github.event.inputs.force_test || 'false' }}
+        run: python btc_ta_signals.py
+
+      - name: Commit updated state file
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add ta_state_btc.json
+          git diff --staged --quiet || git commit -m "Update TA state"
+          git pull --rebase origin main
+          git push
