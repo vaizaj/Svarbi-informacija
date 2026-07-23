@@ -35,7 +35,11 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add etf_flows_state.json
-          git diff --staged --quiet || git commit -m "Update ETF flows state"
-          git pull --rebase origin main
-          git push
+          if [ -f etf_flows_state.json ]; then
+            git add etf_flows_state.json
+            git diff --staged --quiet || git commit -m "Update ETF flows state"
+            git pull --rebase origin main
+            git push
+          else
+            echo "etf_flows_state.json neegzistuoja - praleidžiam commit."
+          fi
