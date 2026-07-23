@@ -2,103 +2,49 @@
 Bitcoin ir Ethereum Spot ETF dienos srautų botas -> Telegram
 ------------------------------------------------------------------
 Kartą per dieną tikrina naujausius JAV Spot BTC ir ETH ETF grynuosius
-srautus (inflows/outflows) iš Farside Investors - nemokamo, viešai
-prieinamo šaltinio (farside.co.uk), kuris renka oficialius kiekvieno
-ETF fondo duomenis.
+srautus (inflows/outflows) per OFICIALŲ SoSoValue API
+(https://sosovalue.gitbook.io/soso-value-api-doc/).
+
+Reikalauja SOSO_API_KEY - nemokamo, bet patvirtinimo reikalaujančio
+API rakto iš https://sosovalue.com/developer/dashboard
 
 Siunčia žinutę tik kai atsiranda NAUJA diena su duomenimis (kad
 nepersiųstų tos pačios dienos kelis kartus).
 """
 
 import os
-import re
 import json
 import requests
-from bs4 import BeautifulSoup
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+SOSO_API_KEY = os.environ["SOSO_API_KEY"]
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
+BASE_URL = "https://openapi.sosovalue.com/api/v1"
 STATE_FILE = "etf_flows_state.json"
 
-DATE_PATTERN = re.compile(r"^\d{1,2} \w{3} \d{4}$")
 
+def fetch_latest_flow(symbol: str) -> dict:
+    """Gauna naujausią dienos ETF srautų suvestinę konkrečiai monetai (BTC/ETH)."""
+    url = f"{BASE_URL}/etfs/summary-history"
+    headers = {"x-soso-api-key": SOSO_API_KEY}
+    params = {"symbol": symbol, "country_code": "US", "limit": 3}
 
-def parse_number(text: str):
-    """Konvertuoja '(44.5)' -> -44.5, '209.4' -> 209.4, '0.0' -> 0.0"""
-    text = text.strip().replace(",", "")
-    if not text:
-        return None
-    negative = text.startswith("(") and text.endswith(")")
-    if negative:
-        text = text[1:-1]
-    try:
-        value = float(text)
-        return -value if negative else value
-    except ValueError:
-        return None
-
-
-def fetch_latest_flow(url: str) -> dict:
-    """
-    Nuskaito Farside lentelę ir grąžina paskutinės dienos su duomenimis
-    informaciją: data, bendras (Total) grynasis srautas, ir 2 didžiausi
-    individualūs fondai tą dieną.
-    """
-    resp = requests.get(url, headers=HEADERS, timeout=20)
+    resp = requests.get(url, headers=headers, params=params, timeout=20)
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    data = resp.json()
 
-    table = soup.find("table")
-    if not table:
-        raise RuntimeError("Nerasta lentelė puslapyje.")
+    # API gali grąžinti arba tiesiog sąrašą, arba {"data": [...]}
+    records = data.get("data", data) if isinstance(data, dict) else data
+    if not records:
+        raise RuntimeError(f"Tuščias atsakymas iš SoSoValue ({symbol})")
 
-    rows = table.find_all("tr")
-
-    # Randam ticker eilutę (antra eilutė, su fondų kodais pvz. IBIT, FBTC...)
-    ticker_row = None
-    for row in rows:
-        cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if len(cells) > 3 and all(c.isupper() or c == "" for c in cells[:3] if c):
-            ticker_row = cells
-            break
-
-    # Randam VISAS datos eilutes, imam PASKUTINĘ (naujausią)
-    latest_row_cells = None
-    latest_date_text = None
-    for row in rows:
-        cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if cells and DATE_PATTERN.match(cells[0]):
-            latest_date_text = cells[0]
-            latest_row_cells = cells
-
-    if not latest_row_cells:
-        raise RuntimeError("Nerasta jokia datos eilutė.")
-
-    total_value = parse_number(latest_row_cells[-1])
-
-    # Individualūs fondų srautai (be pirmo stulpelio - datos, ir paskutinio - Total)
-    fund_flows = []
-    if ticker_row:
-        tickers = ticker_row[1:len(latest_row_cells) - 1]
-        values = latest_row_cells[1:-1]
-        for ticker, val in zip(tickers, values):
-            num = parse_number(val)
-            if num is not None and ticker:
-                fund_flows.append((ticker, num))
-
-    fund_flows.sort(key=lambda x: abs(x[1]), reverse=True)
-
+    latest = records[0]  # naujausia data pirma (reverse chronological)
     return {
-        "date": latest_date_text,
-        "total": total_value,
-        "top_funds": fund_flows[:3],
+        "date": latest["date"],
+        "net_inflow": float(latest["total_net_inflow"]),
+        "net_assets": float(latest.get("total_net_assets", 0)),
+        "cum_inflow": float(latest.get("cum_net_inflow", 0)),
     }
 
 
@@ -115,16 +61,17 @@ def save_state(state: dict):
 
 
 def format_usd_millions(value: float) -> str:
-    sign = "+" if value >= 0 else ""
-    return f"{sign}${value:,.1f}M"
+    millions = value / 1_000_000
+    if millions >= 0:
+        return f"+${millions:,.1f}M"
+    return f"-${abs(millions):,.1f}M"
 
 
 def build_section(name: str, data: dict) -> str:
     lines = [f"<b>{name} ETF</b> ({data['date']})"]
-    lines.append(f"Bendras grynasis srautas: {format_usd_millions(data['total'])}")
-    if data["top_funds"]:
-        top_str = ", ".join(f"{t}: {format_usd_millions(v)}" for t, v in data["top_funds"])
-        lines.append(f"Didžiausi indėliai: {top_str}")
+    lines.append(f"Grynasis srautas: {format_usd_millions(data['net_inflow'])}")
+    lines.append(f"Bendras turtas (AUM): ${data['net_assets'] / 1_000_000_000:,.2f}B")
+    lines.append(f"Kaupiamasis srautas nuo starto: ${data['cum_inflow'] / 1_000_000_000:,.2f}B")
     return "\n".join(lines)
 
 
@@ -142,13 +89,13 @@ def main():
     state = load_state()
 
     try:
-        btc_data = fetch_latest_flow("https://farside.co.uk/btc/")
+        btc_data = fetch_latest_flow("BTC")
     except Exception as e:
         print(f"[KLAIDA] Nepavyko gauti BTC ETF duomenų: {e}")
         btc_data = None
 
     try:
-        eth_data = fetch_latest_flow("https://farside.co.uk/eth/")
+        eth_data = fetch_latest_flow("ETH")
     except Exception as e:
         print(f"[KLAIDA] Nepavyko gauti ETH ETF duomenų: {e}")
         eth_data = None
@@ -174,7 +121,7 @@ def main():
         sections.append(build_section("Ξ Ethereum", eth_data))
 
     message = "\n\n".join(sections)
-    message += "\n\n<i>Šaltinis: Farside Investors (farside.co.uk)</i>"
+    message += "\n\n<i>Šaltinis: SoSoValue</i>"
 
     send_to_telegram(message)
 
