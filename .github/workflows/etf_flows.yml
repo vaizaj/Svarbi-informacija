@@ -1,0 +1,41 @@
+name: ETF Daily Flows
+
+on:
+  schedule:
+    # 8:00 UTC (~10-11 val. Lietuvos laiku) - po to, kai Farside atnaujina
+    # duomenis (JAV rinkos uždarymo vakare/naktį JAV laiku)
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  etf-flows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Run ETF flows check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python etf_flows.py
+
+      - name: Commit updated state file
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add etf_flows_state.json
+          git diff --staged --quiet || git commit -m "Update ETF flows state"
+          git pull --rebase origin main
+          git push
