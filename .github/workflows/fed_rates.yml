@@ -1,0 +1,44 @@
+name: Fed Rate Changes
+
+on:
+  schedule:
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fed-rates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Fed rate check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python fed_rates.py
+
+      - name: Commit updated state file
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          if [ -f fed_rates_state.json ]; then
+            git add fed_rates_state.json
+            git diff --staged --quiet || git commit -m "Update Fed rates state"
+            git pull --rebase origin main
+            git push
+          else
+            echo "fed_rates_state.json neegzistuoja - praleidžiam commit."
+          fi
