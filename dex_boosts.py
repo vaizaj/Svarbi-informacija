@@ -157,6 +157,9 @@ def main():
         liquidity = info.get("liquidity_usd")
         mcap = info.get("market_cap")
         pair_url = info.get("pair_url") or boost.get("url") or f"https://dexscreener.com/{chain_id}/{token_address}"
+        axiom_url = f"https://axiom.trade/meme/{token_address}"
+        gmgn_url = f"https://gmgn.ai/{chain_id}/token/{token_address}"
+        blockscout_url = f"https://robinhoodchain.blockscout.com/address/{token_address}"
 
         message = test_note + (
             f"🚀 <b>Naujas apmokėtas DEX Boost - {chain_id.capitalize()}</b>\n\n"
@@ -170,8 +173,13 @@ def main():
         if mcap:
             message += f"Market Cap: ${mcap:,.0f}\n"
 
-        message += f"\nAdresas: <code>{token_address}</code>\n"
-        message += f"{pair_url}\n\n"
+        message += f"\nAdresas: <code>{token_address}</code>\n\n"
+        message += (
+            f"👉 <a href=\"{pair_url}\">Dexscreener</a> | "
+            f"<a href=\"{gmgn_url}\">GMGN</a> | "
+            f"<a href=\"{axiom_url}\">Axiom</a> | "
+            f"<a href=\"{blockscout_url}\">Blockscout</a>\n\n"
+        )
         message += (
             "<i>⚠️ Tai TIK informacija, ne rekomendacija. Boost apmokėjimas "
             "nerodo projekto kokybės - dažnai naudojamas prieš 'rug pull'. "
