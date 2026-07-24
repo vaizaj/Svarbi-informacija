@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       force_test:
-        description: 'Priverstinai išsiųsti testinę žinutę nepriklausomai nuo naujų boost'"'"'ų'
+        description: 'Priverstinai issiusti testine zinute nepriklausomai nuo nauju boostu'
         required: false
         default: 'false'
         type: boolean
