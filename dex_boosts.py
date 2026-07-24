@@ -20,6 +20,8 @@ SVARBU (perskaityk prieš naudojant):
 import os
 import json
 import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["DEX_BOOSTS_CHAT_ID"]
@@ -60,6 +62,7 @@ def fetch_token_info(chain_id: str, address: str) -> dict:
                     "liquidity_usd": pair.get("liquidity", {}).get("usd"),
                     "market_cap": pair.get("marketCap") or pair.get("fdv"),
                     "pair_url": pair.get("url"),
+                    "pair_address": pair.get("pairAddress"),
                     "symbol": pair.get("baseToken", {}).get("symbol"),
                     "name": pair.get("baseToken", {}).get("name"),
                 }
@@ -156,15 +159,19 @@ def main():
         price = info.get("price_usd")
         liquidity = info.get("liquidity_usd")
         mcap = info.get("market_cap")
+        pair_address = info.get("pair_address") or token_address
         pair_url = info.get("pair_url") or boost.get("url") or f"https://dexscreener.com/{chain_id}/{token_address}"
-        axiom_url = f"https://axiom.trade/meme/{token_address}"
+        axiom_url = f"https://axiom.trade/meme/{pair_address}"
         gmgn_url = f"https://gmgn.ai/{chain_id}/token/{token_address}"
         blockscout_url = f"https://robinhoodchain.blockscout.com/address/{token_address}"
+
+        detected_at = datetime.now(ZoneInfo("Europe/Vilnius")).strftime("%Y-%m-%d %H:%M:%S")
 
         message = test_note + (
             f"🚀 <b>Naujas apmokėtas DEX Boost - {chain_id.capitalize()}</b>\n\n"
             f"<b>{name}</b> ({symbol})\n"
             f"Boost suma: {amount} / {total_amount}\n"
+            f"Pastebėta: {detected_at} (LT laikas)\n"
         )
         if price:
             message += f"Kaina: ${float(price):.8f}\n"
