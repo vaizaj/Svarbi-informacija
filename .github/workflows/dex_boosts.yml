@@ -1,0 +1,44 @@
+name: DEX Boosts Robinhood Chain
+
+on:
+  schedule:
+    # kas 30 min. (realistiškas intervalas, atsižvelgiant į GitHub throttling)
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dex-boosts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run DEX boosts check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          DEX_BOOSTS_CHAT_ID: ${{ secrets.DEX_BOOSTS_CHAT_ID }}
+        run: python dex_boosts.py
+
+      - name: Commit updated state file
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          if [ -f dex_boosts_state.json ]; then
+            git add dex_boosts_state.json
+            git diff --staged --quiet || git commit -m "Update dex boosts state"
+            git pull --rebase origin main
+            git push
+          else
+            echo "dex_boosts_state.json neegzistuoja - praleidžiam commit."
+          fi
