@@ -44,7 +44,7 @@ jobs:
           if [ -f dex_boosts_state.json ]; then
             git add dex_boosts_state.json
             git diff --staged --quiet || git commit -m "Update dex boosts state"
-            git pull --rebase origin main
+            git pull --rebase -X ours origin main
             git push
           else
             echo "dex_boosts_state.json neegzistuoja - praleidžiam commit."
