@@ -2,12 +2,11 @@ name: DEX Boosts Robinhood Chain
 
 on:
   schedule:
-    # kas 30 min. (realistiškas intervalas, atsižvelgiant į GitHub throttling)
     - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
       force_test:
-        description: 'Priverstinai issiusti testine zinute nepriklausomai nuo nauju boostu'
+        description: 'Priverstinai issiusti testine zinute'
         required: false
         default: 'false'
         type: boolean
@@ -47,5 +46,5 @@ jobs:
             git pull --rebase -X ours origin main
             git push
           else
-            echo "dex_boosts_state.json neegzistuoja - praleidžiam commit."
+            echo "dex_boosts_state.json neegzistuoja - praleidziam commit."
           fi
