@@ -5,6 +5,12 @@ on:
     # kas 30 min. (realistiškas intervalas, atsižvelgiant į GitHub throttling)
     - cron: '*/30 * * * *'
   workflow_dispatch:
+    inputs:
+      force_test:
+        description: 'Priverstinai išsiųsti testinę žinutę nepriklausomai nuo naujų boost'"'"'ų'
+        required: false
+        default: 'false'
+        type: boolean
 
 permissions:
   contents: write
@@ -28,6 +34,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           DEX_BOOSTS_CHAT_ID: ${{ secrets.DEX_BOOSTS_CHAT_ID }}
+          FORCE_TEST: ${{ github.event.inputs.force_test || 'false' }}
         run: python dex_boosts.py
 
       - name: Commit updated state file
