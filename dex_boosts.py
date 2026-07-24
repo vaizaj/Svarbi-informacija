@@ -23,6 +23,7 @@ import requests
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["DEX_BOOSTS_CHAT_ID"]
+FORCE_TEST = os.environ.get("FORCE_TEST", "false").lower() == "true"
 
 HEADERS = {"Accept": "*/*", "User-Agent": "Mozilla/5.0 (compatible; BoostWatchBot/1.0)"}
 STATE_FILE = "dex_boosts_state.json"
@@ -119,9 +120,24 @@ def main():
     state["seen_boosts"] = list(seen)[-500:]
     save_state(state)
 
-    if is_first_run:
+    if is_first_run and not FORCE_TEST:
         print("Pirmas paleidimas - būsena užsirašyta, pranešimai nesiunčiami.")
         return
+
+    test_note = ""
+    if not new_boosts and FORCE_TEST:
+        if robinhood_boosts:
+            # Rodom pirmą jau matytą Robinhood boost'ą kaip testą
+            new_boosts = [robinhood_boosts[0]]
+            test_note = "🧪 <b>TESTINIS PALEIDIMAS</b> (jau matytas boost'as, rodomas pakartotinai)\n\n"
+        elif boosts:
+            # Nėra jokio Robinhood boost'o šiuo metu - rodom pirmą BET KURIOS grandinės,
+            # kad bent patikrintume, jog formatas/siuntimas veikia
+            new_boosts = [boosts[0]]
+            test_note = (
+                f"🧪 <b>TESTINIS PALEIDIMAS</b> (šiuo metu nerasta Robinhood boost'ų, "
+                f"rodoma kito tinklo '{boosts[0].get('chainId')}' pavyzdys formato patikrai)\n\n"
+            )
 
     if not new_boosts:
         print("Naujų Robinhood grandinės boost'ų nerasta.")
@@ -129,20 +145,21 @@ def main():
 
     for boost in new_boosts:
         token_address = boost.get("tokenAddress", "")
+        chain_id = boost.get("chainId", TARGET_CHAIN)
         amount = boost.get("amount", "?")
         total_amount = boost.get("totalAmount", "?")
 
-        info = fetch_token_info(TARGET_CHAIN, token_address)
+        info = fetch_token_info(chain_id, token_address)
 
         name = info.get("name") or "Nežinomas"
         symbol = info.get("symbol") or "?"
         price = info.get("price_usd")
         liquidity = info.get("liquidity_usd")
         mcap = info.get("market_cap")
-        pair_url = info.get("pair_url") or boost.get("url") or f"https://dexscreener.com/{TARGET_CHAIN}/{token_address}"
+        pair_url = info.get("pair_url") or boost.get("url") or f"https://dexscreener.com/{chain_id}/{token_address}"
 
-        message = (
-            f"🚀 <b>Naujas apmokėtas DEX Boost - Robinhood Chain</b>\n\n"
+        message = test_note + (
+            f"🚀 <b>Naujas apmokėtas DEX Boost - {chain_id.capitalize()}</b>\n\n"
             f"<b>{name}</b> ({symbol})\n"
             f"Boost suma: {amount} / {total_amount}\n"
         )
