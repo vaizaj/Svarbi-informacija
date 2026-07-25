@@ -479,12 +479,11 @@ def main():
         "📊 <b>Kaina kirto VWAP į viršų</b>", "📊 <b>Kaina kirto VWAP į apačią</b>",
         "vwap_up", "vwap_down",
     )
-    if strong_buy_pressure_now and not state.get("strong_buy_pressure", False):
-        signals.append(f"🟢 <b>Stiprus pirkimo spaudimas</b> ({buy_sell_data['buy_pct']:.0f}% pirkėjų per 1h)")
-        signal_keys.append("strong_buy")
-    if strong_sell_pressure_now and not state.get("strong_sell_pressure", False):
-        signals.append(f"🔴 <b>Stiprus pardavimo spaudimas</b> ({buy_sell_data['sell_pct']:.0f}% pardavėjų per 1h)")
-        signal_keys.append("strong_sell")
+    # PASTABA: strong_buy/sell_pressure NEBENAUDOJAMAS kaip atskiras signalo
+    # trigeris - tai live, slenkančio 1h lango rodiklis (ne užbaigtos žvakės),
+    # kuris natūraliai svyruoja kas kelias minutes ir sukeldavo per daug
+    # nereikšmingų pranešimų ("flapping"). Reikšmė VIS TIEK rodoma žinutėje
+    # kaip kontekstas, kai žinutė siunčiama dėl KITŲ (stabilių) signalų.
 
     # --- Sutapimo (confluence) skaičiavimas šiam momentui ---
     bullish_count = 0
