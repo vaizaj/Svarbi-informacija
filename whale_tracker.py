@@ -179,7 +179,11 @@ def check_strategy_filings(state: dict, reset_only: bool = False) -> list:
             f"{filing_url}"
         )
 
-    state["seen_filings"] = list(seen_filings)[-200:]
+    # SEC "recent" sąrašas pats savaime ribotas (~1000 paskutinių dokumentų
+    # VISŲ tipų), tad seen_filings natūraliai neaugs be ribos - apkirpimas
+    # NEREIKALINGAS ir buvo klaidingas (set'ai neišsaugo tvarkos, todėl
+    # [-200:] atsitiktinai išmesdavo neseniai pridėtus įrašus)
+    state["seen_filings"] = list(seen_filings)
     return messages
 
 
