@@ -14,6 +14,7 @@ SVARBU: Blockchain duomenys rodo tik adresus ir sumas, NE tapatybes -
 
 import os
 import json
+import time
 import requests
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -194,7 +195,7 @@ def save_state(state: dict):
         json.dump(state, f)
 
 
-def send_to_telegram(text: str):
+def send_to_telegram(text: str, retries: int = 3):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -202,11 +203,20 @@ def send_to_telegram(text: str):
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    resp = requests.post(url, data=payload, timeout=15)
-    if not resp.ok:
+    for attempt in range(retries):
+        resp = requests.post(url, data=payload, timeout=15)
+        if resp.ok:
+            print("[OK] Žinutė išsiųsta.")
+            return True
+        if resp.status_code == 429:
+            retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
+            print(f"[ĮSPĖJIMAS] Telegram rate limit - laukiu {retry_after}s ir bandau vėl...")
+            time.sleep(retry_after + 1)
+            continue
         print(f"[KLAIDA] Nepavyko išsiųsti į Telegram: {resp.text}")
-    else:
-        print("[OK] Žinutė išsiųsta.")
+        return False
+    print("[KLAIDA] Nepavyko išsiųsti po kelių bandymų (rate limit).")
+    return False
 
 
 RESET_STRATEGY = os.environ.get("RESET_STRATEGY", "false").lower() == "true"
@@ -236,6 +246,7 @@ def main():
 
     for msg in all_messages:
         send_to_telegram(msg)
+        time.sleep(2)  # pauzė tarp žinučių, kad išvengtume rate limit
 
 
 if __name__ == "__main__":
