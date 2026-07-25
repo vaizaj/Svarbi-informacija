@@ -36,6 +36,8 @@ TOKEN_INFO_URL = "https://api.dexscreener.com/latest/dex/tokens/{address}"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; BoostWatchBot-WS/1.0)"}
 
 STATE_FILE = "dex_boosts_ws_seen.json"
+DEPLOYER_STATE_FILE = "known_deployers.json"
+BLOCKSCOUT_BASE = "https://robinhoodchain.blockscout.com/api/v2"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,6 +60,55 @@ def load_seen() -> set:
 def save_seen(seen: set):
     with open(STATE_FILE, "w") as f:
         json.dump(list(seen), f)
+
+
+# ---------------------------------------------------------------------------
+# PAKARTOTINIŲ KŪRĖJŲ (deployer) SEKIMAS
+# ---------------------------------------------------------------------------
+
+def load_known_deployers() -> dict:
+    """deployer_address -> [token_address, ...]"""
+    if os.path.exists(DEPLOYER_STATE_FILE):
+        with open(DEPLOYER_STATE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+
+def save_known_deployers(deployers: dict):
+    with open(DEPLOYER_STATE_FILE, "w") as f:
+        json.dump(deployers, f)
+
+
+def get_creator_address(token_address: str) -> str:
+    """Gauna kontrakto kūrėjo adresą per Blockscout API."""
+    try:
+        url = f"{BLOCKSCOUT_BASE}/addresses/{token_address}"
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        return resp.json().get("creator_address_hash")
+    except Exception as e:
+        log.warning(f"Nepavyko gauti kūrėjo adreso: {e}")
+        return None
+
+
+def check_deployer_history(token_address: str, deployers: dict) -> tuple:
+    """
+    Patikrina, ar šio token'o kūrėjas jau anksčiau paleido kitus boostintus
+    token'us. Grąžina (yra_pakartotinis: bool, kiek_iš_viso: int).
+    Atnaujina 'deployers' žodyną vietoje (in-place).
+    """
+    creator = get_creator_address(token_address)
+    if not creator:
+        return False, 0
+
+    existing = deployers.get(creator, [])
+    is_repeat = len(existing) > 0
+
+    if token_address not in existing:
+        existing.append(token_address)
+        deployers[creator] = existing
+
+    return is_repeat, len(existing)
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +184,7 @@ def send_photo_with_caption(image_url: str, caption: str) -> bool:
 # NAUJO BOOST'O APDOROJIMAS
 # ---------------------------------------------------------------------------
 
-def process_boost(boost: dict, seen: set):
+def process_boost(boost: dict, seen: set, known_deployers: dict):
     chain_id = boost.get("chainId")
     token_address = boost.get("tokenAddress", "")
     key = f"{chain_id}:{token_address}:{boost.get('amount')}"
@@ -164,11 +215,17 @@ def process_boost(boost: dict, seen: set):
     total_amount = boost.get("totalAmount", "?")
     detected_at_str = received_at.strftime("%Y-%m-%d %H:%M:%S")
 
+    # --- Pakartotinio kūrėjo patikrinimas ---
+    is_repeat_deployer, deployer_total = check_deployer_history(token_address, known_deployers)
+    save_known_deployers(known_deployers)
+
     image_url = info.get("image_url") or boost.get("icon")
     if image_url:
         short_caption = f"⚡ <b>{name}</b> ({symbol}) - Robinhood"
         if mcap:
             short_caption += f" | MC: ${mcap:,.0f}"
+        if is_repeat_deployer:
+            short_caption += f"\n🚨 PAKARTOTINIS KŪRĖJAS ({deployer_total} token'ų)"
         send_photo_with_caption(image_url, short_caption)
 
     message = (
@@ -183,6 +240,15 @@ def process_boost(boost: dict, seen: set):
         message += f"Likvidumas: ${liquidity:,.0f}\n"
     if mcap:
         message += f"Market Cap: ${mcap:,.0f}\n"
+
+    if is_repeat_deployer:
+        message += (
+            f"\n🚨 <b>ĮSPĖJIMAS: PAKARTOTINIS KŪRĖJAS</b>\n"
+            f"Šis kūrėjas jau anksčiau paleido <b>{deployer_total}</b> kitus "
+            f"boostintus token'us Robinhood grandinėje. Tai DAŽNIAUSIAI rodo "
+            f"'serijinį' token'ų kūrimo modelį, ne organišką projektą - "
+            f"padidinta rizika.\n"
+        )
 
     message += f"\nAdresas: <code>{token_address}</code>\n\n"
     message += (
@@ -207,6 +273,7 @@ def process_boost(boost: dict, seen: set):
 
 async def listen_forever():
     seen = load_seen()
+    known_deployers = load_known_deployers()
     is_first_message = not seen
     reconnect_delay = 5
 
@@ -234,7 +301,7 @@ async def listen_forever():
                             key = f"{boost.get('chainId')}:{boost.get('tokenAddress')}:{boost.get('amount')}"
                             seen.add(key)
                         else:
-                            process_boost(boost, seen)
+                            process_boost(boost, seen, known_deployers)
 
                     if is_first_message:
                         is_first_message = False
