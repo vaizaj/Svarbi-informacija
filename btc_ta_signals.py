@@ -158,7 +158,16 @@ def fetch_buy_sell_ratio(lookback_seconds: int = 3600) -> dict:
 
 
 def fetch_klines() -> pd.DataFrame:
-    """Gauna 1h žvakes iš Kraken viešo API."""
+    """
+    Gauna 1h žvakes iš Kraken viešo API.
+
+    SVARBU: pašaliname PASKUTINĘ žvakę, nes ji dar NEUŽBAIGTA (tebesiformuoja
+    tebevykstančią valandą) - jos reikšmės keičiasi su kiekvienu sandoriu.
+    Jei tikriname dažnai (pvz. kas 5 min.), naudojant šią "gyvą" žvakę,
+    indikatoriai gali "mirksėti" (flapping) - peršokti per slenkstį pirmyn-
+    atgal be jokio realaus pokyčio. Naudojant tik UŽBAIGTAS žvakes, signalai
+    tampa stabilūs, nesikeičiantys kol nesibaigia visa valanda.
+    """
     url = f"https://api.kraken.com/0/public/OHLC?pair={SYMBOL}&interval={INTERVAL_MINUTES}"
     resp = requests.get(url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
@@ -176,6 +185,9 @@ def fetch_klines() -> pd.DataFrame:
     ])
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
+
+    df = df.iloc[:-1].reset_index(drop=True)  # pašalinam dar neužbaigtą paskutinę žvakę
+
     return df
 
 
