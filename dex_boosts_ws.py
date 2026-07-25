@@ -94,12 +94,12 @@ def get_creator_address(token_address: str) -> str:
 def check_deployer_history(token_address: str, deployers: dict) -> tuple:
     """
     Patikrina, ar šio token'o kūrėjas jau anksčiau paleido kitus boostintus
-    token'us. Grąžina (yra_pakartotinis: bool, kiek_iš_viso: int).
+    token'us. Grąžina (yra_pakartotinis: bool, kiek_iš_viso: int, kūrėjo_adresas: str).
     Atnaujina 'deployers' žodyną vietoje (in-place).
     """
     creator = get_creator_address(token_address)
     if not creator:
-        return False, 0
+        return False, 0, None
 
     existing = deployers.get(creator, [])
     is_repeat = len(existing) > 0
@@ -108,7 +108,39 @@ def check_deployer_history(token_address: str, deployers: dict) -> tuple:
         existing.append(token_address)
         deployers[creator] = existing
 
-    return is_repeat, len(existing)
+    return is_repeat, len(existing), creator
+
+
+BOOST_HISTORY_FILE = "boost_history.jsonl"
+
+
+def log_boost_snapshot(token_address: str, chain_id: str, deployer: str,
+                        name: str, symbol: str, price: str, mcap, liquidity,
+                        detected_at: str):
+    """
+    Prideda vieną eilutę į boost_history.jsonl su token'o būsena TUO MOMENTU,
+    kai pirmą kartą pastebėjome boost'ą. Tai leis ATEITYJE palyginti, kaip
+    token'as pasikeitė nuo pirmo pastebėjimo (kilo/krito/numirė).
+
+    Naudojamas JSON Lines formatas (viena JSON eilutė per įrašą), kad būtų
+    lengva PRIDĖTI naujus įrašus, neperskaitant/neperrašant viso failo.
+    """
+    entry = {
+        "detected_at": detected_at,
+        "chain_id": chain_id,
+        "token_address": token_address,
+        "deployer": deployer,
+        "name": name,
+        "symbol": symbol,
+        "price_usd_at_detection": price,
+        "market_cap_at_detection": mcap,
+        "liquidity_usd_at_detection": liquidity,
+    }
+    try:
+        with open(BOOST_HISTORY_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        log.warning(f"Nepavyko įrašyti į boost_history.jsonl: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +248,20 @@ def process_boost(boost: dict, seen: set, known_deployers: dict):
     detected_at_str = received_at.strftime("%Y-%m-%d %H:%M:%S")
 
     # --- Pakartotinio kūrėjo patikrinimas ---
-    is_repeat_deployer, deployer_total = check_deployer_history(token_address, known_deployers)
+    is_repeat_deployer, deployer_total, creator_address = check_deployer_history(token_address, known_deployers)
     save_known_deployers(known_deployers)
+
+    log_boost_snapshot(
+        token_address=token_address,
+        chain_id=chain_id,
+        deployer=creator_address,
+        name=name,
+        symbol=symbol,
+        price=price,
+        mcap=mcap,
+        liquidity=liquidity,
+        detected_at=detected_at_str,
+    )
 
     image_url = info.get("image_url") or boost.get("icon")
     if image_url:
