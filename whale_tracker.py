@@ -43,20 +43,21 @@ def check_btc_whales(state: dict) -> list:
     btc_price = get_btc_price_usd()
     min_btc = MIN_USD_VALUE / btc_price
 
-    # Naudojam blockchain.info "unconfirmed-transactions" + naujausią bloką dideliems sandoriams
-    url = "https://blockchain.info/blocks/?format=json"
+    # Naudojam /latestblock - stabilesnis endpoint'as nei /blocks/
+    url = "https://blockchain.info/latestblock"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
-        blocks = resp.json().get("blocks", [])
+        latest = resp.json()
     except Exception as e:
-        print(f"[KLAIDA] Nepavyko gauti blokų sąrašo: {e}")
+        print(f"[KLAIDA] Nepavyko gauti naujausio bloko: {e}")
         return messages
 
-    if not blocks:
+    if not latest:
         return messages
 
-    latest_block_height = blocks[0]["height"]
+    latest_block_height = latest["height"]
+    latest_block_hash = latest["hash"]
     last_seen_block = state.get("last_seen_block", 0)
 
     if latest_block_height <= last_seen_block:
@@ -65,7 +66,7 @@ def check_btc_whales(state: dict) -> list:
 
     # Tikrinam tik naujausią bloką, kad neapkrautume API per daug užklausų
     try:
-        block_url = f"https://blockchain.info/rawblock/{blocks[0]['hash']}"
+        block_url = f"https://blockchain.info/rawblock/{latest_block_hash}"
         resp = requests.get(block_url, headers=HEADERS, timeout=20)
         resp.raise_for_status()
         block_data = resp.json()
