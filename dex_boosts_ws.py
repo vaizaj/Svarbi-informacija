@@ -1,69 +1,181 @@
 """
-Stebimų piniginių NAUJO TOKEN'O SUKŪRIMO sekimo botas -> Telegram
-------------------------------------------------------------------------
-Seka KONKREČIŲ, jau ištirtų piniginių transakcijas per Blockscout API ir
-praneša AKIMIRKSNIU, kai tik piniginė SUKURIA (deploy'ina) naują token'o
-kontraktą - DAR PRIEŠ jam gaunant DexScreener boost'ą.
+DEX Screener Boost sekimo botas (WebSocket, realus laikas) -> Telegram
+--------------------------------------------------------------------------
+NAUJA VERSIJA, naudojanti DexScreener WebSocket API vietoj periodinio
+(polling) tikrinimo. Tai leidžia gauti pranešimus BEVEIK AKIMIRKSNIU,
+kai tik DexScreener savo pusėje užregistruoja naują apmokėtą boost'ą -
+be jokio "laukimo iki kito tikrinimo".
 
-Tai GREIČIAUSIAS įmanomas signalas apie šios piniginės naują projektą,
-nes kontrakto sukūrimas įvyksta ANKSČIAU nei boost apmokėjimas.
+SVARBU: Šis scriptas turi veikti KAIP NUOLATINIS PROCESAS (ne per cron!),
+nes WebSocket reikalauja palaikyti atvirą ryšį. Naudoti per systemd
+service, kad VPS automatiškai jį paleistų/perkrautų.
 
-SVARBU: Tai TIK INFORMACINIS botas. Jis NIEKO neperka automatiškai.
-Kartu su pranešimu rodoma ISTORINĖ šios piniginės statistika (iš
-atgalinio testavimo), kad sprendimas būtų informuotas, bet sprendimą
-VISADA priima pats vartotojas.
+Ta pati sąžininga pastaba kaip anksčiau:
+- Tai TIK INFORMACINIS botas. Jis NIEKO neperka automatiškai.
+- Boost apmokėjimas NĖRA projekto kokybės garantija - dažnai naudojamas
+  prieš "rug pull". Sprendimą visada priimi pats, savo rizika.
 """
 
 import os
 import json
+import time
+import asyncio
+import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import requests
+import websockets
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["DEX_BOOSTS_CHAT_ID"]
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; WalletWatchBot/1.0)"}
+WS_URL = "wss://api.dexscreener.com/token-boosts/latest/v1"
+TARGET_CHAIN = "robinhood"
+TOKEN_INFO_URL = "https://api.dexscreener.com/latest/dex/tokens/{address}"
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; BoostWatchBot-WS/1.0)"}
+
+STATE_FILE = "dex_boosts_ws_seen.json"
+DEPLOYER_STATE_FILE = "known_deployers.json"
 BLOCKSCOUT_BASE = "https://robinhoodchain.blockscout.com/api/v2"
 
-STATE_FILE = "wallet_watch_seen.json"
-
-# Stebimos piniginės su ISTORINE statistika (iš atgalinio testavimo,
-# analyze_single_deployer.py rezultatų). Prideėk naujas pinigines čia,
-# kai ištirsi jų track record.
-WATCHED_WALLETS = {
-    "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB": {
-        "label": "Serijinis kūrėjas #1 (178+ token'ų)",
-        "stats": "Istoriškai: 50% atvejų pasiekia +30% piką, mediana 1.5h iki piko, 24% iškart krenta.",
-    },
-}
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+log = logging.getLogger("dex_boosts_ws")
 
 
-def load_seen() -> dict:
-    """wallet_address -> set(seen_tx_hashes)"""
+# ---------------------------------------------------------------------------
+# BŪSENOS VALDYMAS (kad neprarastume "matytų" boost'ų perkraunant procesą)
+# ---------------------------------------------------------------------------
+
+def load_seen() -> set:
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, "r") as f:
-            raw = json.load(f)
-            return {k: set(v) for k, v in raw.items()}
+            return set(json.load(f))
+    return set()
+
+
+def save_seen(seen: set):
+    with open(STATE_FILE, "w") as f:
+        json.dump(list(seen), f)
+
+
+# ---------------------------------------------------------------------------
+# PAKARTOTINIŲ KŪRĖJŲ (deployer) SEKIMAS
+# ---------------------------------------------------------------------------
+
+def load_known_deployers() -> dict:
+    """deployer_address -> [token_address, ...]"""
+    if os.path.exists(DEPLOYER_STATE_FILE):
+        with open(DEPLOYER_STATE_FILE, "r") as f:
+            return json.load(f)
     return {}
 
 
-def save_seen(seen: dict):
-    with open(STATE_FILE, "w") as f:
-        json.dump({k: list(v) for k, v in seen.items()}, f)
+def save_known_deployers(deployers: dict):
+    with open(DEPLOYER_STATE_FILE, "w") as f:
+        json.dump(deployers, f)
 
 
-def fetch_wallet_transactions(wallet_address: str) -> list:
+def get_creator_address(token_address: str) -> str:
+    """Gauna kontrakto kūrėjo adresą per Blockscout API."""
     try:
-        url = f"{BLOCKSCOUT_BASE}/addresses/{wallet_address}/transactions"
-        resp = requests.get(url, headers=HEADERS, timeout=20)
+        url = f"{BLOCKSCOUT_BASE}/addresses/{token_address}"
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        return resp.json().get("creator_address_hash")
+    except Exception as e:
+        log.warning(f"Nepavyko gauti kūrėjo adreso: {e}")
+        return None
+
+
+def check_deployer_history(token_address: str, deployers: dict) -> tuple:
+    """
+    Patikrina, ar šio token'o kūrėjas jau anksčiau paleido kitus boostintus
+    token'us. Grąžina (yra_pakartotinis: bool, kiek_iš_viso: int, kūrėjo_adresas: str).
+    Atnaujina 'deployers' žodyną vietoje (in-place).
+    """
+    creator = get_creator_address(token_address)
+    if not creator:
+        return False, 0, None
+
+    existing = deployers.get(creator, [])
+    is_repeat = len(existing) > 0
+
+    if token_address not in existing:
+        existing.append(token_address)
+        deployers[creator] = existing
+
+    return is_repeat, len(existing), creator
+
+
+BOOST_HISTORY_FILE = "boost_history.jsonl"
+
+
+def log_boost_snapshot(token_address: str, chain_id: str, deployer: str,
+                        name: str, symbol: str, price: str, mcap, liquidity,
+                        detected_at: str):
+    """
+    Prideda vieną eilutę į boost_history.jsonl su token'o būsena TUO MOMENTU,
+    kai pirmą kartą pastebėjome boost'ą. Tai leis ATEITYJE palyginti, kaip
+    token'as pasikeitė nuo pirmo pastebėjimo (kilo/krito/numirė).
+
+    Naudojamas JSON Lines formatas (viena JSON eilutė per įrašą), kad būtų
+    lengva PRIDĖTI naujus įrašus, neperskaitant/neperrašant viso failo.
+    """
+    entry = {
+        "detected_at": detected_at,
+        "chain_id": chain_id,
+        "token_address": token_address,
+        "deployer": deployer,
+        "name": name,
+        "symbol": symbol,
+        "price_usd_at_detection": price,
+        "market_cap_at_detection": mcap,
+        "liquidity_usd_at_detection": liquidity,
+    }
+    try:
+        with open(BOOST_HISTORY_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        log.warning(f"Nepavyko įrašyti į boost_history.jsonl: {e}")
+
+
+# ---------------------------------------------------------------------------
+# DEXSCREENER PAPILDOMA INFORMACIJA (kaina, likvidumas, market cap, nuotrauka)
+# ---------------------------------------------------------------------------
+
+def fetch_token_info(chain_id: str, address: str) -> dict:
+    try:
+        url = TOKEN_INFO_URL.format(address=address)
+        resp = requests.get(url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("items", [])
+        pairs = data.get("pairs") or []
+        for pair in pairs:
+            if pair.get("chainId") == chain_id:
+                return {
+                    "price_usd": pair.get("priceUsd"),
+                    "liquidity_usd": pair.get("liquidity", {}).get("usd"),
+                    "market_cap": pair.get("marketCap") or pair.get("fdv"),
+                    "pair_url": pair.get("url"),
+                    "pair_address": pair.get("pairAddress"),
+                    "symbol": pair.get("baseToken", {}).get("symbol"),
+                    "name": pair.get("baseToken", {}).get("name"),
+                    "image_url": pair.get("info", {}).get("imageUrl"),
+                }
     except Exception as e:
-        print(f"[KLAIDA] Nepavyko gauti {wallet_address} transakcijų: {e}")
-        return []
+        log.warning(f"Nepavyko gauti token info: {e}")
+    return {}
 
 
-def send_to_telegram(text: str):
+# ---------------------------------------------------------------------------
+# TELEGRAM SIUNTIMAS
+# ---------------------------------------------------------------------------
+
+def send_to_telegram(text: str, retries: int = 3) -> bool:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -71,63 +183,185 @@ def send_to_telegram(text: str):
         "parse_mode": "HTML",
         "disable_web_page_preview": False,
     }
-    resp = requests.post(url, data=payload, timeout=15)
+    for attempt in range(retries):
+        resp = requests.post(url, data=payload, timeout=15)
+        if resp.ok:
+            return True
+        if resp.status_code == 429:
+            retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
+            log.warning(f"Telegram rate limit - laukiu {retry_after}s")
+            time.sleep(retry_after + 1)
+            continue
+        log.error(f"Nepavyko išsiųsti į Telegram: {resp.text}")
+        return False
+    return False
+
+
+def send_photo_with_caption(image_url: str, caption: str) -> bool:
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "photo": image_url,
+        "caption": caption,
+        "parse_mode": "HTML",
+    }
+    resp = requests.post(url, data=payload, timeout=20)
     if not resp.ok:
-        print(f"[KLAIDA] Nepavyko išsiųsti į Telegram: {resp.text}")
-    else:
-        print("[OK] Naujo token'o sukūrimo pranešimas išsiųstas.")
+        log.warning(f"Nepavyko išsiųsti nuotraukos: {resp.text}")
+        return False
+    return True
 
 
-def main():
+# ---------------------------------------------------------------------------
+# NAUJO BOOST'O APDOROJIMAS
+# ---------------------------------------------------------------------------
+
+def process_boost(boost: dict, seen: set, known_deployers: dict):
+    chain_id = boost.get("chainId")
+    token_address = boost.get("tokenAddress", "")
+    key = f"{chain_id}:{token_address}:{boost.get('amount')}"
+
+    if key in seen:
+        return
+    seen.add(key)
+
+    if chain_id != TARGET_CHAIN:
+        return  # sekam TIK Robinhood grandinę
+
+    received_at = datetime.now(ZoneInfo("Europe/Vilnius"))
+    log.info(f"NAUJAS Robinhood boost aptiktas: {token_address} ({received_at})")
+
+    info = fetch_token_info(chain_id, token_address)
+    name = info.get("name") or "Nežinomas"
+    symbol = info.get("symbol") or "?"
+    price = info.get("price_usd")
+    liquidity = info.get("liquidity_usd")
+    mcap = info.get("market_cap")
+    pair_address = info.get("pair_address") or token_address
+    pair_url = info.get("pair_url") or boost.get("url") or f"https://dexscreener.com/{chain_id}/{token_address}"
+    axiom_url = f"https://axiom.trade/meme/{pair_address}"
+    gmgn_url = f"https://gmgn.ai/{chain_id}/token/{token_address}"
+    blockscout_url = f"https://robinhoodchain.blockscout.com/address/{token_address}"
+
+    amount = boost.get("amount", "?")
+    total_amount = boost.get("totalAmount", "?")
+    detected_at_str = received_at.strftime("%Y-%m-%d %H:%M:%S")
+
+    # --- Pakartotinio kūrėjo patikrinimas ---
+    is_repeat_deployer, deployer_total, creator_address = check_deployer_history(token_address, known_deployers)
+    save_known_deployers(known_deployers)
+
+    log_boost_snapshot(
+        token_address=token_address,
+        chain_id=chain_id,
+        deployer=creator_address,
+        name=name,
+        symbol=symbol,
+        price=price,
+        mcap=mcap,
+        liquidity=liquidity,
+        detected_at=detected_at_str,
+    )
+
+    image_url = info.get("image_url") or boost.get("icon")
+    if image_url:
+        short_caption = f"🟠 <b>{name}</b> ({symbol}) - Robinhood [Boost apmokėtas]"
+        if mcap:
+            short_caption += f" | MC: ${mcap:,.0f}"
+        if is_repeat_deployer:
+            short_caption += f"\n🚨 PAKARTOTINIS KŪRĖJAS ({deployer_total} token'ų)"
+        send_photo_with_caption(image_url, short_caption)
+
+    message = (
+        f"🟠 <b>ETAPAS 2: DEX BOOST APMOKĖTAS</b> - Robinhood\n\n"
+        f"<b>{name}</b> ({symbol})\n"
+        f"Boost suma: {amount} / {total_amount}\n"
+        f"Aptikta: {detected_at_str} (LT laikas, WebSocket)\n"
+    )
+    if price:
+        message += f"Kaina: ${float(price):.8f}\n"
+    if liquidity:
+        message += f"Likvidumas: ${liquidity:,.0f}\n"
+    if mcap:
+        message += f"Market Cap: ${mcap:,.0f}\n"
+
+    if is_repeat_deployer:
+        message += (
+            f"\n🚨 <b>ĮSPĖJIMAS: PAKARTOTINIS KŪRĖJAS</b>\n"
+            f"Šis kūrėjas jau anksčiau paleido <b>{deployer_total}</b> kitus "
+            f"boostintus token'us Robinhood grandinėje. Tai DAŽNIAUSIAI rodo "
+            f"'serijinį' token'ų kūrimo modelį, ne organišką projektą - "
+            f"padidinta rizika.\n"
+        )
+
+    message += f"\nAdresas: <code>{token_address}</code>\n\n"
+    message += (
+        f"👉 <a href=\"{pair_url}\">Dexscreener</a> | "
+        f"<a href=\"{gmgn_url}\">GMGN</a> | "
+        f"<a href=\"{axiom_url}\">Axiom</a> | "
+        f"<a href=\"{blockscout_url}\">Blockscout</a>\n\n"
+    )
+    message += (
+        "<i>⚠️ Tai TIK informacija, ne rekomendacija. Boost apmokėjimas "
+        "nerodo projekto kokybės - dažnai naudojamas prieš 'rug pull'. "
+        "Sprendimą priimk pats, savo rizika.</i>"
+    )
+
+    send_to_telegram(message)
+    log.info(f"Pranešimas išsiųstas: {name} ({symbol})")
+
+
+# ---------------------------------------------------------------------------
+# WEBSOCKET PAGRINDINĖ LOGIKA (su automatiniu reconnect)
+# ---------------------------------------------------------------------------
+
+async def listen_forever():
     seen = load_seen()
+    known_deployers = load_known_deployers()
+    is_first_message = not seen
+    reconnect_delay = 5
 
-    for wallet_address, wallet_info in WATCHED_WALLETS.items():
-        is_first_check = wallet_address not in seen
-        wallet_seen = seen.setdefault(wallet_address, set())
+    while True:
+        try:
+            log.info(f"Jungiuosi prie {WS_URL} ...")
+            async with websockets.connect(WS_URL, ping_interval=20, ping_timeout=20) as ws:
+                log.info("Prisijungta! Laukiu boost'ų srauto...")
+                reconnect_delay = 5  # sėkmingai prisijungus, atstatom delsimo laikroditi
 
-        transactions = fetch_wallet_transactions(wallet_address)
+                async for raw_message in ws:
+                    try:
+                        data = json.loads(raw_message)
+                    except json.JSONDecodeError:
+                        continue
 
-        for tx in transactions:
-            tx_hash = tx.get("hash")
-            if not tx_hash or tx_hash in wallet_seen:
-                continue
-            wallet_seen.add(tx_hash)
+                    boosts = data.get("data", data) if isinstance(data, dict) else data
+                    if not isinstance(boosts, list):
+                        continue
 
-            if is_first_check:
-                continue  # pirmą kartą tik užsirašom, nesiunčiam senos istorijos
+                    for boost in boosts:
+                        if is_first_message:
+                            # pirmas gautas pranešimas - tik užsirašom, nesiunčiam,
+                            # kad neužtvindytų senais duomenimis paleidimo metu
+                            key = f"{boost.get('chainId')}:{boost.get('tokenAddress')}:{boost.get('amount')}"
+                            seen.add(key)
+                        else:
+                            process_boost(boost, seen, known_deployers)
 
-            created_contract = tx.get("created_contract_address_hash") or (
-                tx.get("created_contract") or {}
-            ).get("hash")
+                    if is_first_message:
+                        is_first_message = False
+                        log.info(f"Pirmas pranešimas apdorotas (užsirašyta {len(seen)} esamų boost'ų). Nuo dabar - realus sekimas.")
 
-            if not created_contract:
-                continue  # tai ne kontrakto sukūrimo transakcija
+                    save_seen(seen)
 
-            token_address = created_contract
-            axiom_url = f"https://axiom.trade/meme/{token_address}"
-            message = (
-                f"🟣 <b>ETAPAS 1: TOKEN'AS SUKURTAS</b> (dar NE boost'as)\n\n"
-                f"Piniginė: <code>{wallet_address}</code>\n"
-                f"({wallet_info['label']})\n\n"
-                f"📊 <b>Istorinė statistika:</b>\n{wallet_info['stats']}\n\n"
-                f"Naujas kontraktas: <code>{token_address}</code>\n\n"
-                f"👉 <a href=\"https://dexscreener.com/robinhood/{token_address}\">Dexscreener</a> | "
-                f"<a href=\"https://gmgn.ai/robinhood/token/{token_address}\">GMGN</a> | "
-                f"<a href=\"{axiom_url}\">Axiom</a> | "
-                f"<a href=\"https://robinhoodchain.blockscout.com/address/{token_address}\">Blockscout</a>\n\n"
-                f"<i>⚠️ Tai TIK informacija apie NAUJĄ kontraktą - dar GALI neturėti "
-                f"likvidumo/boost'o (Axiom/GMGN nuorodos gali dar neveikti, kol "
-                f"nesukurta prekybos pora). Praeities statistika NEGARANTUOJA "
-                f"ateities rezultato. Sprendimą priimk pats, savo rizika.</i>"
-            )
-            send_to_telegram(message)
-
-        if is_first_check:
-            print(f"Pirmas patikrinimas {wallet_address} - {len(wallet_seen)} senų tx užsirašyta.")
-
-    save_seen(seen)
-    print("Patikrinimas baigtas.")
+        except (websockets.exceptions.ConnectionClosed, OSError) as e:
+            log.warning(f"WebSocket ryšys nutrūko ({e}). Bandau iš naujo po {reconnect_delay}s...")
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, 60)  # eksponentinis atgalinis laikas, max 60s
+        except Exception as e:
+            log.error(f"Netikėta klaida: {e}")
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, 60)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(listen_forever())
