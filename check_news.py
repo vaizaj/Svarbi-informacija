@@ -37,11 +37,12 @@ KEYWORDS_FILTER = ["solana", "sol", "bitcoin", "btc", "ethereum", "eth", "stella
 SEEN_FILE = "seen_articles.json"
 
 # Kiek simbolių iš santraukos naudoti (trumpa ištrauka, ne visas straipsnis)
-SUMMARY_MAX_CHARS = 300
+SUMMARY_MAX_CHARS = 500  # padidinta nuo 300, kad tilptų 2-3 pilni sakiniai
 
 
 def clean_summary(raw_summary: str) -> str:
-    """Pašalina HTML žymes ir apkarpo santrauką iki protingo ilgio."""
+    """Pašalina HTML žymes ir apkarpo santrauką iki protingo ilgio,
+    stengiantis baigti PILNU sakiniu (ties tašku), ne pusiau žodžiu."""
     if not raw_summary:
         return ""
     # pašalinam HTML žymes
@@ -50,10 +51,22 @@ def clean_summary(raw_summary: str) -> str:
     text = html.unescape(text)
     # sutvarkom tarpus
     text = re.sub(r"\s+", " ", text).strip()
-    # apkarpom iki protingo ilgio
-    if len(text) > SUMMARY_MAX_CHARS:
-        text = text[:SUMMARY_MAX_CHARS].rsplit(" ", 1)[0] + "..."
-    return text
+
+    if len(text) <= SUMMARY_MAX_CHARS:
+        return text
+
+    truncated = text[:SUMMARY_MAX_CHARS]
+    # bandom rasti paskutinį sakinio pabaigos tašką (. ! ?) limito ribose
+    last_sentence_end = max(
+        truncated.rfind(". "), truncated.rfind("! "), truncated.rfind("? ")
+    )
+    # naudojam sakinio ribą tik jei ji NĖRA per arti pradžios (kad neliktų
+    # per trumpa, jei pirmas sakinys ilgas ir tašką randam per anksti)
+    if last_sentence_end > SUMMARY_MAX_CHARS * 0.4:
+        return truncated[: last_sentence_end + 1]
+
+    # jei tinkamo sakinio taško nerasta - apkerpam ties žodžio riba
+    return truncated.rsplit(" ", 1)[0] + "..."
 
 
 def translate_to_lithuanian(text: str) -> str:
