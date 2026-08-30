@@ -22,16 +22,14 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 RSS_FEEDS = {
+    # Sumažinta iki 4 pačių autoritetingiausių/didžiausių šaltinių, kad
+    # sumažintume bendrą srautą - likę (CryptoSlate, NewsBTC, U.Today,
+    # CryptoPotato, BeInCrypto, Bitcoin Magazine) dažnai perpublikuoja
+    # tas pačias naujienas, tik su vėlavimu.
     "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "Cointelegraph": "https://cointelegraph.com/rss",
     "Decrypt": "https://decrypt.co/feed",
     "The Block": "https://www.theblock.co/rss.xml",
-    "Bitcoin Magazine": "https://bitcoinmagazine.com/feed",
-    "CryptoSlate": "https://cryptoslate.com/feed/",
-    "NewsBTC": "https://www.newsbtc.com/feed/",
-    "U.Today": "https://u.today/rss",
-    "CryptoPotato": "https://cryptopotato.com/feed/",
-    "BeInCrypto": "https://beincrypto.com/feed/",
 }
 
 KEYWORDS_FILTER = ["solana", "sol", "bitcoin", "btc", "ethereum", "eth", "stellar", "xlm", "trump", "white house"]
@@ -102,7 +100,14 @@ def matches_filter(title: str, summary: str) -> bool:
     if not KEYWORDS_FILTER:
         return True
     text = (title + " " + summary).lower()
-    return any(kw.lower() in text for kw in KEYWORDS_FILTER)
+    # VISO ŽODŽIO atitikimas (\b - word boundary), kad "sol" neatitiktų
+    # "solution", "eth" neatitiktų "method" ir pan. - be to sukeldavo
+    # daug klaidingų, nesusijusių straipsnių praėjimą per filtrą.
+    for kw in KEYWORDS_FILTER:
+        pattern = r"\b" + re.escape(kw.lower()) + r"\b"
+        if re.search(pattern, text):
+            return True
+    return False
 
 
 def send_to_telegram(text: str):
