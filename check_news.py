@@ -82,7 +82,23 @@ def save_seen(seen: set):
         json.dump(trimmed, f)
 
 
+ERROR_PAGE_MARKERS = [
+    "error 500", "error 404", "server error", "that's an error",
+    "that's all we know", "page not found", "403 forbidden",
+]
+
+
+def is_error_page_content(title: str, summary: str) -> bool:
+    """Atpažįsta, ar antraštė/santrauka atrodo kaip svetainės klaidos puslapio
+    turinys (pvz. 'Error 500'), o ne tikras straipsnis - tai apsauga nuo
+    šaltinio RSS srauto laikinai užfiksuotų klaidų."""
+    text = (title + " " + summary).lower()
+    return any(marker in text for marker in ERROR_PAGE_MARKERS)
+
+
 def matches_filter(title: str, summary: str) -> bool:
+    if is_error_page_content(title, summary):
+        return False
     if not KEYWORDS_FILTER:
         return True
     text = (title + " " + summary).lower()
