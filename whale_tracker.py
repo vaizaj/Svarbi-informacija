@@ -24,7 +24,9 @@ STATE_FILE = "whale_state.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; WhaleBot/1.0)"}
 
 # Minimali sandorio vertė USD, kad būtų laikoma "whale" transakcija
-MIN_USD_VALUE = 10_000_000
+MIN_USD_VALUE = 50_000_000  # padidinta nuo $10mln iki $50mln - sumažina srautą,
+# paliekant tik tikrai reikšmingus sandorius (dažnai buvo daug $10-30mln
+# biržų vidinių/konsolidacijos sandorių, kurie nėra tikri "whale" signalai)
 
 
 def get_btc_price_usd() -> float:
