@@ -38,6 +38,7 @@ SEEN_FILE = "seen_articles.json"
 
 # Kiek simbolių iš santraukos naudoti (trumpa ištrauka, ne visas straipsnis)
 SUMMARY_MAX_CHARS = 500  # padidinta nuo 300, kad tilptų 2-3 pilni sakiniai
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/1.0)"}
 
 
 def clean_summary(raw_summary: str) -> str:
@@ -67,6 +68,31 @@ def clean_summary(raw_summary: str) -> str:
 
     # jei tinkamo sakinio taško nerasta - apkerpam ties žodžio riba
     return truncated.rsplit(" ", 1)[0] + "..."
+
+
+MIN_SUMMARY_CHARS = 150  # jei RSS santrauka trumpesnė - bandom papildyti iš puslapio
+
+
+def fetch_og_description(article_url: str) -> str:
+    """
+    Jei RSS santrauka per trumpa (tik 1 sakinys), bandom gauti straipsnio
+    'og:description' meta žymą - tai TA PATI 'trumpinuko' rūšis, kurią
+    leidėjas specialiai paruošia socialiniam dalinimuisi, dažnai išsamesnė
+    nei RSS laukas. Grąžina "" jei nepavyksta.
+    """
+    try:
+        resp = requests.get(article_url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        match = re.search(
+            r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']',
+            resp.text,
+            re.IGNORECASE,
+        )
+        if match:
+            return html.unescape(match.group(1)).strip()
+    except Exception as e:
+        print(f"[ĮSPĖJIMAS] Nepavyko gauti og:description: {e}")
+    return ""
 
 
 def translate_to_lithuanian(text: str) -> str:
@@ -164,8 +190,16 @@ def main():
                 continue
 
             if matches_filter(title, summary):
-                title_lt = translate_to_lithuanian(title)
                 summary_clean = clean_summary(summary)
+
+                # Jei RSS santrauka per trumpa (tik 1 sakinys) - bandom
+                # papildyti iš og:description meta žymos straipsnio puslapyje
+                if len(summary_clean) < MIN_SUMMARY_CHARS and link:
+                    og_desc = fetch_og_description(link)
+                    if og_desc and len(og_desc) > len(summary_clean):
+                        summary_clean = clean_summary(og_desc)
+
+                title_lt = translate_to_lithuanian(title)
                 summary_lt = translate_to_lithuanian(summary_clean)
 
                 message = f"<b>[{source_name}]</b> {title_lt}"
