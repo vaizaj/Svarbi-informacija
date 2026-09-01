@@ -56,6 +56,10 @@ WATCHED_WALLETS = {
         "label": "Serijinis kūrėjas #3 (38 token'ai)",
         "stats": "Istoriškai: 53% atvejų pasiekia +30% piką, mediana +39%, 100% 'gyvi'.",
     },
+    "0x0c37a24F5D23A486FA692d1500881d698B1F77a4": {
+        "label": "Serijinis kūrėjas #4 (7 token'ai, AUKŠČIAUSIAS +30% rate)",
+        "stats": "Istoriškai: 86% atvejų pasiekia +30% piką (aukščiausias iš visų!), mediana +162%. Mažesnė imtis (N=7), tad didesnis netikrumas nei kitų kandidatų.",
+    },
 }
 WATCHED_WALLETS_LOWER = {k.lower(): v for k, v in WATCHED_WALLETS.items()}
 
