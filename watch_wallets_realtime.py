@@ -51,6 +51,13 @@ WATCHED_WALLETS = {
 }
 WATCHED_WALLETS_LOWER = {k.lower(): v for k, v in WATCHED_WALLETS.items()}
 
+# ERC20 "Transfer(address,address,uint256)" įvykio parašas (keccak256 hash'as)
+# ir nulinis adresas (32 baitų, "topic" formatas) - kartu sudaro "mint"
+# (naujo token'o išleidimo) požymį, kuris veikia NEPRIKLAUSOMAI nuo to,
+# ar token'as sukurtas tiesiogiai, ar per launchpad/fabrikos kontraktą.
+TRANSFER_EVENT_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+ZERO_ADDRESS_TOPIC = "0x" + "0" * 64
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("wallet_watch_rt")
 
@@ -118,10 +125,6 @@ def handle_block(block_hash: str, seen: set):
     for tx in block.get("transactions", []):
         tx_hash = tx.get("hash")
         from_addr = (tx.get("from") or "").lower()
-        to_addr = tx.get("to")  # None/null reiškia kontrakto sukūrimą
-
-        if to_addr is not None:
-            continue  # ne kontrakto sukūrimas
 
         wallet_info = WATCHED_WALLETS_LOWER.get(from_addr)
         if not wallet_info:
@@ -131,11 +134,28 @@ def handle_block(block_hash: str, seen: set):
             continue
         seen.add(tx_hash)
 
-        # gaunam receipt, kad sužinotume SUKURTO kontrakto adresą
+        # SVARBU: netikrinam vien "to == null" (tiesioginis kontrakto
+        # sukūrimas), nes DAUGUMA memecoin paleidimų vyksta PER launchpad/
+        # fabrikos kontraktą - piniginės transakcija eina Į FABRIKĄ, o
+        # naujas token'as sukuriamas VIDINIU būdu. Vietoj to ieškom
+        # UNIVERSALAUS požymio - ERC20 "Transfer" įvykio NUO NULINIO adreso
+        # (tai standartinis "mint" - naujo token'o išleidimo - įvykis,
+        # veikiantis NEPRIKLAUSOMAI nuo to, KAIP token'as buvo sukurtas).
         receipt = rpc_call("eth_getTransactionReceipt", [tx_hash])
         if not receipt:
             continue
-        token_address = receipt.get("contractAddress")
+
+        token_address = None
+        for log_entry in receipt.get("logs", []):
+            topics = log_entry.get("topics", [])
+            if (
+                len(topics) >= 2
+                and topics[0].lower() == TRANSFER_EVENT_TOPIC
+                and topics[1].lower() == ZERO_ADDRESS_TOPIC
+            ):
+                token_address = log_entry.get("address")
+                break
+
         if not token_address:
             continue
 
