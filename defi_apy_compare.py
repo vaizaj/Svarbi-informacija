@@ -27,11 +27,11 @@ MIN_TVL_USD = 10_000_000  # tik dideli, patikimi "pool'ai" (>=$10mln likvidumo)
 # Tikslūs simboliai, kuriuos ieškome (case-insensitive, TIKSLUS atitikimas,
 # kad išvengtume LP porų kaip "USDC-USDT" ar panašiai)
 TARGET_ASSETS = {
-    "SOL": ["SOL"],
-    "ETH": ["ETH", "STETH", "WSTETH", "RETH", "CBETH"],
+    "SOL": ["SOL", "MSOL", "JITOSOL", "BSOL", "JSOL"],
+    "ETH": ["ETH", "STETH", "WSTETH", "RETH", "CBETH", "WEETH"],
     "USDC": ["USDC"],
     "USDT": ["USDT"],
-    "DAI": ["DAI"],
+    "DAI": ["DAI", "USDS", "SUSDS", "SDAI"],
 }
 
 # Žinomi, patikimi protokolai (mažina riziką rekomenduoti nepatikrintus projektus)
@@ -40,6 +40,7 @@ TRUSTED_PROJECTS = [
     "kamino-lend", "kamino-liquidity", "marinade", "marinade-liquid-staking",
     "jito", "sky-lending", "makerdao", "spark", "morpho-blue", "rocket-pool",
     "benqi-lending", "solend", "binance-staked-eth", "coinbase-wrapped-staked-eth",
+    "blazestake", "jpool", "sky-savings-rate", "sky-money", "spark-savings",
 ]
 
 
