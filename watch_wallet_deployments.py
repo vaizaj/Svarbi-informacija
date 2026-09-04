@@ -31,8 +31,20 @@ STATE_FILE = "wallet_watch_seen.json"
 # kai ištirsi jų track record.
 WATCHED_WALLETS = {
     "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB": {
-        "label": "Serijinis kūrėjas #1 (178+ token'ų)",
-        "stats": "Istoriškai: 50% atvejų pasiekia +30% piką, mediana 1.5h iki piko, 24% iškart krenta.",
+        "label": "Serijinis kūrėjas #1 (200+ token'ų)",
+        "stats": "Istoriškai: 50% atvejų pasiekia +30% piką, mediana +33%, 100% 'gyvi'.",
+    },
+    "0x000000e200088D55C39a11F609E5F667729ad49b": {
+        "label": "Serijinis kūrėjas #2 (101 token'as, GERESNIS track record)",
+        "stats": "Istoriškai: 65% atvejų pasiekia +30% piką, mediana +52%, 99% 'gyvi'.",
+    },
+    "0x5bd1Fbe78a78fe8236fa00CF48fbEBA74ae34661": {
+        "label": "Serijinis kūrėjas #3 (38 token'ai)",
+        "stats": "Istoriškai: 53% atvejų pasiekia +30% piką, mediana +39%, 100% 'gyvi'.",
+    },
+    "0x0c37a24F5D23A486FA692d1500881d698B1F77a4": {
+        "label": "Serijinis kūrėjas #4 (7 token'ai, AUKŠČIAUSIAS +30% rate)",
+        "stats": "Istoriškai: 86% atvejų pasiekia +30% piką, mediana +162%. Mažesnė imtis.",
     },
 }
 
