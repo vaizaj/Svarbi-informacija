@@ -24,6 +24,13 @@ TELEGRAM_CHAT_ID = os.environ["DEX_BOOSTS_CHAT_ID"]
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; WalletWatchBot/1.0)"}
 BLOCKSCOUT_BASE = "https://robinhoodchain.blockscout.com/api/v2"
 
+# ERC20 "Transfer(address,address,uint256)" įvykio parašas ir nulinis
+# adresas - kartu sudaro "mint" (naujo token'o išleidimo) požymį, kuris
+# veikia NEPRIKLAUSOMAI nuo to, ar token'as sukurtas tiesiogiai, ar per
+# launchpad/fabrikos kontraktą (dauguma atvejų - per fabriką).
+TRANSFER_EVENT_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+ZERO_ADDRESS_TOPIC = "0x" + "0" * 64
+
 STATE_FILE = "wallet_watch_seen.json"
 
 # Stebimos piniginės su ISTORINE statistika (iš atgalinio testavimo,
@@ -75,6 +82,37 @@ def fetch_wallet_transactions(wallet_address: str) -> list:
         return []
 
 
+def fetch_mint_token_address(tx_hash: str) -> str:
+    """
+    Patikrina transakcijos LOGUS dėl ERC20 'mint' (Transfer nuo nulinio
+    adreso) įvykio - tai UNIVERSALUS naujo token'o sukūrimo požymis,
+    veikiantis NEPRIKLAUSOMAI nuo to, ar tai buvo tiesioginis kontrakto
+    sukūrimas, ar per launchpad/fabrikos kontraktą (kaip DAUGUMA atvejų).
+    Grąžina naujo token'o adresą arba None.
+    """
+    try:
+        url = f"{BLOCKSCOUT_BASE}/transactions/{tx_hash}/logs"
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        for log_entry in data.get("items", []):
+            topics = log_entry.get("topics", [])
+            if (
+                len(topics) >= 2
+                and topics[0]
+                and topics[0].lower() == TRANSFER_EVENT_TOPIC
+                and topics[1]
+                and topics[1].lower() == ZERO_ADDRESS_TOPIC
+            ):
+                address_field = log_entry.get("address")
+                if isinstance(address_field, dict):
+                    return address_field.get("hash")
+                return address_field
+    except Exception as e:
+        print(f"[ĮSPĖJIMAS] Nepavyko patikrinti {tx_hash} logų: {e}")
+    return None
+
+
 def send_to_telegram(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -108,14 +146,10 @@ def main():
             if is_first_check:
                 continue  # pirmą kartą tik užsirašom, nesiunčiam senos istorijos
 
-            created_contract = tx.get("created_contract_address_hash") or (
-                tx.get("created_contract") or {}
-            ).get("hash")
+            token_address = fetch_mint_token_address(tx_hash)
+            if not token_address:
+                continue  # tai ne naujo token'o sukūrimo (mint) transakcija
 
-            if not created_contract:
-                continue  # tai ne kontrakto sukūrimo transakcija
-
-            token_address = created_contract
             axiom_url = f"https://axiom.trade/meme/{token_address}"
             message = (
                 f"🟣 <b>ETAPAS 1: TOKEN'AS SUKURTAS</b> (dar NE boost'as)\n\n"
