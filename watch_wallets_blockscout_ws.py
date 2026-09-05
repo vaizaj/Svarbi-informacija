@@ -186,7 +186,7 @@ async def listen_forever():
             async with websockets.connect(WS_URL, ping_interval=20, ping_timeout=20) as ws:
                 join_ref = 1
                 for wallet_address in WATCHED_WALLETS:
-                    topic = f"addresses:{wallet_address}"
+                    topic = f"addresses:{wallet_address.lower()}"
                     join_msg = [str(join_ref), str(join_ref), topic, "phx_join", {}]
                     await ws.send(json.dumps(join_msg))
                     join_ref += 1
