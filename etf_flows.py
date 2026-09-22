@@ -1,7 +1,7 @@
 """
-Bitcoin ir Ethereum Spot ETF dienos srautų botas -> Telegram
+Bitcoin, Ethereum ir Solana Spot ETF dienos srautų botas -> Telegram
 ------------------------------------------------------------------
-Kartą per dieną tikrina naujausius JAV Spot BTC ir ETH ETF grynuosius
+Kartą per dieną tikrina naujausius JAV Spot BTC, ETH ir SOL ETF grynuosius
 srautus (inflows/outflows) per OFICIALŲ SoSoValue API
 (https://sosovalue.gitbook.io/soso-value-api-doc/).
 
@@ -25,7 +25,7 @@ STATE_FILE = "etf_flows_state.json"
 
 
 def fetch_latest_flow(symbol: str) -> dict:
-    """Gauna naujausią dienos ETF srautų suvestinę konkrečiai monetai (BTC/ETH)."""
+    """Gauna naujausią dienos ETF srautų suvestinę konkrečiai monetai (BTC/ETH/SOL)."""
     url = f"{BASE_URL}/etfs/summary-history"
     headers = {"x-soso-api-key": SOSO_API_KEY}
     params = {"symbol": symbol, "country_code": "US", "limit": 3}
@@ -100,17 +100,25 @@ def main():
         print(f"[KLAIDA] Nepavyko gauti ETH ETF duomenų: {e}")
         eth_data = None
 
-    if not btc_data and not eth_data:
+    try:
+        sol_data = fetch_latest_flow("SOL")
+    except Exception as e:
+        print(f"[KLAIDA] Nepavyko gauti SOL ETF duomenų: {e}")
+        sol_data = None
+
+    if not btc_data and not eth_data and not sol_data:
         print("Nepavyko gauti jokių duomenų.")
         return
 
     last_btc_date = state.get("last_btc_date")
     last_eth_date = state.get("last_eth_date")
+    last_sol_date = state.get("last_sol_date")
 
     btc_is_new = btc_data and btc_data["date"] != last_btc_date
     eth_is_new = eth_data and eth_data["date"] != last_eth_date
+    sol_is_new = sol_data and sol_data["date"] != last_sol_date
 
-    if not btc_is_new and not eth_is_new:
+    if not btc_is_new and not eth_is_new and not sol_is_new:
         print("Nėra naujų ETF srautų duomenų (ta pati diena, kaip anksčiau).")
         return
 
@@ -119,6 +127,8 @@ def main():
         sections.append(build_section("₿ Bitcoin", btc_data))
     if eth_is_new:
         sections.append(build_section("Ξ Ethereum", eth_data))
+    if sol_is_new:
+        sections.append(build_section("◎ Solana", sol_data))
 
     message = "\n\n".join(sections)
     message += "\n\n<i>Šaltinis: SoSoValue</i>"
@@ -129,6 +139,8 @@ def main():
         state["last_btc_date"] = btc_data["date"]
     if eth_data:
         state["last_eth_date"] = eth_data["date"]
+    if sol_data:
+        state["last_sol_date"] = sol_data["date"]
     save_state(state)
 
 
