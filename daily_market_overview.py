@@ -11,10 +11,12 @@ Kasdien siunčia išsamią rinkos apžvalgą:
 
 import os
 import re
+import time
 import html
 import requests
 import feedparser
 import yfinance as yf
+from deep_translator import MyMemoryTranslator
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -104,6 +106,25 @@ def fetch_todays_headlines() -> list:
     return headlines[:12]  # padidinta nuo 6 iki 12
 
 
+def translate_to_lithuanian(text: str, retries: int = 2) -> str:
+    """Verčia per MyMemory (nemokama, be kortelės, be Google IP blokavimo rizikos)."""
+    if not text:
+        return text
+    for attempt in range(retries + 1):
+        try:
+            result = MyMemoryTranslator(source="en-US", target="lt-LT").translate(text)
+            time.sleep(0.3)
+            return result
+        except Exception as e:
+            if "too many requests" in str(e).lower() and attempt < retries:
+                print(f"[ĮSPĖJIMAS] Vertimo limitas - laukiu 3s ({attempt + 1}/{retries})...")
+                time.sleep(3)
+                continue
+            print(f"[ĮSPĖJIMAS] Nepavyko išversti: {e}")
+            return text
+    return text
+
+
 def format_index_line(data: dict) -> str:
     if not data:
         return ""
@@ -127,10 +148,11 @@ def build_message() -> str:
     if headlines:
         message += "<b>📰 Šiandienos JAV/Europos/pasaulio naujienos</b>\n"
         for h in headlines:
-            message += f"• {h}\n"
+            h_lt = translate_to_lithuanian(h)
+            message += f"• {h_lt}\n"
         message += "\n"
 
-    message += "<i>Šaltiniai: Yahoo Finance, SoSoValue, Investing.com</i>"
+    message += "<i>Šaltiniai: Yahoo Finance, Investing.com</i>"
     return message
 
 
