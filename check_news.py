@@ -17,7 +17,7 @@ import re
 import html
 import feedparser
 import requests
-from deep_translator import GoogleTranslator
+from deep_translator import MyMemoryTranslator
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -38,7 +38,7 @@ KEYWORDS_FILTER = ["solana", "sol", "bitcoin", "btc", "ethereum", "eth", "stella
 SEEN_FILE = "seen_articles.json"
 
 # Kiek simbolių iš santraukos naudoti (trumpa ištrauka, ne visas straipsnis)
-SUMMARY_MAX_CHARS = 500  # padidinta nuo 300, kad tilptų 2-3 pilni sakiniai
+SUMMARY_MAX_CHARS = 650  # padidinta iki ~4 pilnų sakinių
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; NewsBot/1.0)"}
 
 
@@ -98,16 +98,15 @@ def fetch_og_description(article_url: str) -> str:
 
 def translate_to_lithuanian(text: str, retries: int = 2) -> str:
     """
-    Išverčia tekstą į lietuvių kalbą. Google (per nemokamą deep_translator
-    wrapper'į) riboja iki 5 užklausų/sek. - jei gauname būtent ŠIĄ klaidą,
-    PALAUKIAM ir bandom dar kartą, vietoj to, kad iškart pasiduotume ir
-    grąžintume neišverstą originalą.
+    Išverčia tekstą į lietuvių kalbą per MyMemory (nemokama, be kortelės,
+    be Google IP blokavimo rizikos). MyMemory reikalauja pilno kalbos
+    kodo formato (en-US, lt-LT), ne trumpo (en, lt).
     """
     if not text:
         return text
     for attempt in range(retries + 1):
         try:
-            result = GoogleTranslator(source="auto", target="lt").translate(text)
+            result = MyMemoryTranslator(source="en-US", target="lt-LT").translate(text)
             time.sleep(0.3)  # mandagumo pauzė TARP visų vertimo kvietimų
             return result
         except Exception as e:
@@ -220,6 +219,9 @@ def main():
                 message = f"<b>[{source_name}]</b> {title_lt}"
                 if summary_lt:
                     message += f"\n\n{summary_lt}"
+                message += f"\n\n🇬🇧 <i>{title}</i>"
+                if summary_clean:
+                    message += f"\n\n{summary_clean}"
                 message += f"\n\n{link}"
 
                 send_to_telegram(message)
