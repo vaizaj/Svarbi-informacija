@@ -1,0 +1,41 @@
+name: Weekly Review Digest
+
+on:
+  schedule:
+    # Kas 6 val. - kaupia straipsnius visą savaitę; scriptas PATS nusprendžia,
+    # ar jau laikas siųsti santrauką (tik sekmadienį po 18:00 LT)
+    - cron: '0 5,11,17,21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  weekly-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests feedparser deep-translator
+
+      - name: Run weekly review bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python weekly_review.py
+
+      - name: Commit updated state files
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add -A weekly_digest_buffer.jsonl weekly_digest_state.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "Update weekly digest buffer/state"
+          git pull --rebase origin main
+          git push
