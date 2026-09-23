@@ -1,0 +1,41 @@
+name: Crypto News Check
+
+on:
+  schedule:
+    # Paleidžia kas valandą (UTC laiku) - realistiškesnis intervalas,
+    # nes GitHub gali gerokai vėluoti/praleisti labai dažnus (15 min.) paleidimus
+    - cron: '0 * * * *'
+  workflow_dispatch: # leidžia paleisti rankiniu būdu per GitHub svetainę
+
+permissions:
+  contents: write
+
+jobs:
+  check-news:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests feedparser deep-translator
+
+      - name: Run news check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python check_news.py
+
+      - name: Commit updated seen_articles.json
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add seen_articles.json
+          git diff --staged --quiet || git commit -m "Update seen articles"
+          git pull --rebase origin main
+          git push
