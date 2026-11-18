@@ -5,6 +5,7 @@ on:
     # Kas 6 val. - kaupia straipsnius visą savaitę; scriptas PATS nusprendžia,
     # ar jau laikas siųsti santrauką (tik sekmadienį po 18:00 LT)
     - cron: '0 5,11,17,21 * * *'
+    - cron: '15 16,18,19,20 * * 0'
   workflow_dispatch:
 
 permissions:
