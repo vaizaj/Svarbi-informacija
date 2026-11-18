@@ -19,6 +19,7 @@ import os
 import re
 import json
 import html
+import html
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -240,7 +241,7 @@ def send_weekly_digest():
     entries = load_buffer()
     if not entries:
         print("Buferis tuščias - nėra ką siųsti šią savaitę.")
-        return
+        return True
 
     grouped = {}
     for e in entries:
@@ -260,10 +261,10 @@ def send_weekly_digest():
     if rate_highlights or top_items:
         message += "<b>🔥 SVARBIAUSI SAVAITĖS ĮVYKIAI</b>\n"
         for h in rate_highlights:
-            message += f"• {h}\n"
+            message += f"• {html.escape(h)}\n"
         for e in top_items[:4]:
             title_lt = translate_safe(e["title"])
-            message += f"• {title_lt}\n"
+            message += f"• {html.escape(title_lt)}\n"
         message += "\n"
 
     category_order = ["📊 Makroekonomika", "📈 Rinkos naujienos", "💼 Pelno ataskaitos"]
@@ -276,31 +277,49 @@ def send_weekly_digest():
         message += f"<b>{cat}</b>\n"
         for e in items[:max_per_category]:
             title_lt = translate_safe(e["title"])
-            message += f"• {title_lt}\n"
+            message += f"• {html.escape(title_lt)}\n"
         if len(items) > max_per_category:
             message += f"  <i>...ir dar {len(items) - max_per_category} straipsnių šia tema</i>\n"
         message += "\n"
 
     message += "<i>Šaltiniai: Investing.com, Yahoo Finance</i>"
 
-    send_to_telegram(message)
+    if not send_to_telegram(message):
+        return False
     clear_buffer()
     print("Savaitės apžvalga išsiųsta, buferis išvalytas.")
+    return True
 
 
-def send_to_telegram(text: str):
+def _post(text, parse_mode):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    resp = requests.post(url, data=payload, timeout=15)
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text,
+               "disable_web_page_preview": True}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    resp = requests.post(url, data=payload, timeout=20)
     if not resp.ok:
-        print(f"[KLAIDA] Nepavyko išsiųsti į Telegram: {resp.text}")
-    else:
-        print("[OK] Savaitės apžvalga išsiųsta į Telegram.")
+        print(f"[KLAIDA] Telegram ({parse_mode or 'plain'}): {resp.status_code} {resp.text}")
+    return resp.ok
+
+
+def send_to_telegram(text: str) -> bool:
+    chunks, cur = [], ""
+    for line in text.split("\n"):
+        if len(cur) + len(line) + 1 > 3800:
+            chunks.append(cur)
+            cur = ""
+        cur += line + "\n"
+    if cur.strip():
+        chunks.append(cur)
+    ok_all = True
+    for ch in chunks:
+        ok = _post(ch, "HTML")
+        if not ok:
+            ok = _post(re.sub(r"<[^>]+>", "", html.unescape(ch)), None)
+        ok_all = ok_all and ok
+    print("[OK] Savaitės apžvalga išsiųsta į Telegram." if ok_all else "[KLAIDA] Apžvalga NEIŠSIŲSTA.")
+    return ok_all
 
 
 def main():
@@ -315,9 +334,9 @@ def main():
     already_sent_today = last_digest_date == today_str
 
     if is_digest_time and not already_sent_today:
-        send_weekly_digest()
-        state["last_digest_date"] = today_str
-        save_state(state)
+        if send_weekly_digest():
+            state["last_digest_date"] = today_str
+            save_state(state)
     else:
         print("Ne santraukos siuntimo laikas - tik kaupiame duomenis.")
 
